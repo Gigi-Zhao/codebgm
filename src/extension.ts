@@ -325,7 +325,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
-    public resolveWebviewView(webviewView: vscode.WebviewView): void | Thenable<void> {
+    public resolveWebviewView(webviewView: vscode.WebviewView): void | Promise<void> {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
