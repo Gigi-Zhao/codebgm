@@ -310,6 +310,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
     private _lastSwitchTime: number = Date.now();
     private _minDuration: number = 5000;
     private _currentMode: string = 'deep_focus';
+    private _isManuallyPaused: boolean = false;
     private _playlists: { [key: string]: string[] } = {
         'deep_focus': [
             'Since TMRW 始于明天 - 从忧伤到忧伤.mp3',
@@ -356,7 +357,16 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
     private _handleMessage(message: any) {
         switch (message.command) {
             case 'audioEnded':
-                this._playRandomTrack(this._currentMode);
+                // Only auto-play next track if not manually paused
+                if (!this._isManuallyPaused) {
+                    this._playRandomTrack(this._currentMode);
+                }
+                break;
+            case 'audioPaused':
+                this._isManuallyPaused = true;
+                break;
+            case 'audioResumed':
+                this._isManuallyPaused = false;
                 break;
         }
     }
@@ -369,6 +379,21 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     this._keystrokes.shift();
                 }
                 this._analyzeTypingPattern();
+                
+                // Send keystroke info to webview for effects
+                if (this._view) {
+                    const lastChange = e.contentChanges[e.contentChanges.length - 1];
+                    if (lastChange && lastChange.text) {
+                        // Extract the last character typed
+                        const lastChar = lastChange.text[lastChange.text.length - 1];
+                        if (lastChar && lastChar.match(/[a-z]/i)) {
+                            this._view.webview.postMessage({
+                                command: 'keyPressed',
+                                key: lastChar.toLowerCase()
+                            });
+                        }
+                    }
+                }
             }
         });
         this.context.subscriptions.push(disposable);
@@ -392,7 +417,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
         if (newMode !== this._currentMode) {
             this._currentMode = newMode;
             this._lastSwitchTime = now;
-            this._playRandomTrack(newMode);
+            // Only auto-play if not manually paused
+            if (!this._isManuallyPaused) {
+                this._playRandomTrack(newMode);
+            }
         }
     }
 
@@ -465,6 +493,13 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     background: transparent;
                     border-radius: 2px;
                 }
+                #effectsCanvas {
+                    width: 100%;
+                    height: 120px;
+                    background: transparent;
+                    border-radius: 2px;
+                    margin-top: 8px;
+                }
                 audio { 
                     display: none;
                 }
@@ -476,7 +511,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     <button id="toggle">播放</button>
                     <span class="status">模式：<span id="mode">深度专注</span></span>
                 </div>
+                <div class="row">
+                    <span class="status" style="font-size: 10px; opacity: 0.6;">按 A-Z 键触发动效</span>
+                </div>
                 <canvas id="viz"></canvas>
+                <canvas id="effectsCanvas"></canvas>
                 <audio id="audio" crossorigin="anonymous"></audio>
             </div>
             <script>
@@ -486,18 +525,500 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 const modeEl = document.getElementById('mode');
                 const canvas = document.getElementById('viz');
                 const ctx = canvas.getContext('2d');
+                const effectsCanvas = document.getElementById('effectsCanvas');
+                const effectsCtx = effectsCanvas.getContext('2d');
                 
                 // Set canvas size
                 function resizeCanvas() {
                     const rect = canvas.getBoundingClientRect();
                     canvas.width = rect.width * window.devicePixelRatio;
                     canvas.height = rect.height * window.devicePixelRatio;
+                    
+                    const effectsRect = effectsCanvas.getBoundingClientRect();
+                    effectsCanvas.width = effectsRect.width * window.devicePixelRatio;
+                    effectsCanvas.height = effectsRect.height * window.devicePixelRatio;
+                    effectsCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                    
+                    console.log('Canvas resized:', {
+                        effectsCanvas: {
+                            width: effectsCanvas.width,
+                            height: effectsCanvas.height,
+                            rect: effectsRect
+                        }
+                    });
                 }
                 resizeCanvas();
                 window.addEventListener('resize', resizeCanvas);
 
                 let started = false;
                 let ac, analyser, src;
+                
+                // Keyboard Effects System
+                let effects = [];
+                let effectId = 0;
+                const MAX_EFFECTS = 20; // Limit number of effects for performance
+                
+                // Effect types configuration
+                const effectTypes = {
+                    'a': { type: 'circle', color: '#ff6b6b', sound: 'low' },
+                    'b': { type: 'particle', color: '#4ecdc4', sound: 'mid' },
+                    'c': { type: 'wave', color: '#45b7d1', sound: 'high' },
+                    'd': { type: 'triangle', color: '#96ceb4', sound: 'low' },
+                    'e': { type: 'square', color: '#feca57', sound: 'mid' },
+                    'f': { type: 'hexagon', color: '#ff9ff3', sound: 'high' },
+                    'g': { type: 'spiral', color: '#54a0ff', sound: 'low' },
+                    'h': { type: 'burst', color: '#5f27cd', sound: 'mid' },
+                    'i': { type: 'ripple', color: '#00d2d3', sound: 'high' },
+                    'j': { type: 'star', color: '#ff9f43', sound: 'low' },
+                    'k': { type: 'diamond', color: '#ee5a24', sound: 'mid' },
+                    'l': { type: 'cross', color: '#0984e3', sound: 'high' },
+                    'm': { type: 'heart', color: '#e84393', sound: 'low' },
+                    'n': { type: 'lightning', color: '#fdcb6e', sound: 'mid' },
+                    'o': { type: 'flower', color: '#6c5ce7', sound: 'high' },
+                    'p': { type: 'gear', color: '#a29bfe', sound: 'low' },
+                    'q': { type: 'crown', color: '#fd79a8', sound: 'mid' },
+                    'r': { type: 'arrow', color: '#fdcb6e', sound: 'high' },
+                    's': { type: 'shield', color: '#00b894', sound: 'low' },
+                    't': { type: 'moon', color: '#74b9ff', sound: 'mid' },
+                    'u': { type: 'sun', color: '#fdcb6e', sound: 'high' },
+                    'v': { type: 'leaf', color: '#00b894', sound: 'low' },
+                    'w': { type: 'butterfly', color: '#e17055', sound: 'mid' },
+                    'x': { type: 'x', color: '#636e72', sound: 'high' },
+                    'y': { type: 'yin-yang', color: '#2d3436', sound: 'low' },
+                    'z': { type: 'zigzag', color: '#6c5ce7', sound: 'mid' }
+                };
+                
+                // Create effect function
+                function createEffect(key) {
+                    console.log('createEffect called with key:', key);
+                    const config = effectTypes[key.toLowerCase()];
+                    if (!config) {
+                        console.log('No config found for key:', key);
+                        return;
+                    }
+                    console.log('Creating effect:', config);
+                    
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    const x = Math.random() * rect.width;
+                    const y = Math.random() * rect.height;
+                    
+                    const effect = {
+                        id: effectId++,
+                        type: config.type,
+                        color: config.color,
+                        x: x,
+                        y: y,
+                        size: 20 + Math.random() * 40,
+                        life: 1.0,
+                        maxLife: 1.0,
+                        rotation: 0,
+                        velocity: {
+                            x: (Math.random() - 0.5) * 4,
+                            y: (Math.random() - 0.5) * 4
+                        },
+                        particles: config.type === 'particle' ? [] : null
+                    };
+                    
+                    // Initialize particles for particle effect
+                    if (config.type === 'particle') {
+                        for (let i = 0; i < 8; i++) {
+                            effect.particles.push({
+                                x: x,
+                                y: y,
+                                vx: (Math.random() - 0.5) * 8,
+                                vy: (Math.random() - 0.5) * 8,
+                                life: 1.0
+                            });
+                        }
+                    }
+                    
+                    effects.push(effect);
+                    
+                    // Remove oldest effects if we exceed the limit
+                    if (effects.length > MAX_EFFECTS) {
+                        effects.splice(0, effects.length - MAX_EFFECTS);
+                    }
+                    
+                    // Play sound effect
+                    playSoundEffect(config.sound);
+                }
+                
+                // Play sound effect
+                function playSoundEffect(type) {
+                    if (!ac) return;
+                    
+                    const oscillator = ac.createOscillator();
+                    const gainNode = ac.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(ac.destination);
+                    
+                    const frequencies = {
+                        'low': 100 + Math.random() * 100,
+                        'mid': 300 + Math.random() * 200,
+                        'high': 600 + Math.random() * 400
+                    };
+                    
+                    oscillator.frequency.setValueAtTime(frequencies[type], ac.currentTime);
+                    oscillator.type = 'sine';
+                    
+                    gainNode.gain.setValueAtTime(0.1, ac.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.3);
+                    
+                    oscillator.start(ac.currentTime);
+                    oscillator.stop(ac.currentTime + 0.3);
+                }
+                
+                // Render effects
+                function renderEffects() {
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                    
+                    // Only continue rendering if there are effects
+                    if (effects.length === 0) {
+                        requestAnimationFrame(renderEffects);
+                        return;
+                    }
+                    
+                    for (let i = effects.length - 1; i >= 0; i--) {
+                        const effect = effects[i];
+                        effect.life -= 0.02;
+                        
+                        if (effect.life <= 0) {
+                            effects.splice(i, 1);
+                            continue;
+                        }
+                        
+                        effect.x += effect.velocity.x;
+                        effect.y += effect.velocity.y;
+                        effect.rotation += 0.1;
+                        
+                        const alpha = effect.life;
+                        const size = effect.size * effect.life;
+                        
+                        effectsCtx.save();
+                        effectsCtx.globalAlpha = alpha;
+                        effectsCtx.fillStyle = effect.color;
+                        effectsCtx.strokeStyle = effect.color;
+                        effectsCtx.lineWidth = 2;
+                        
+                        effectsCtx.translate(effect.x, effect.y);
+                        effectsCtx.rotate(effect.rotation);
+                        
+                        switch (effect.type) {
+                            case 'circle':
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, 0, size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'particle':
+                                effect.particles.forEach(particle => {
+                                    particle.x += particle.vx;
+                                    particle.y += particle.vy;
+                                    particle.life -= 0.05;
+                                    particle.vx *= 0.98;
+                                    particle.vy *= 0.98;
+                                    
+                                    if (particle.life > 0) {
+                                        effectsCtx.globalAlpha = particle.life * alpha;
+                                        effectsCtx.beginPath();
+                                        effectsCtx.arc(particle.x - effect.x, particle.y - effect.y, 3, 0, Math.PI * 2);
+                                        effectsCtx.fill();
+                                    }
+                                });
+                                break;
+                                
+                            case 'wave':
+                                effectsCtx.beginPath();
+                                for (let j = 0; j < 5; j++) {
+                                    const waveSize = size * (1 - j * 0.2);
+                                    effectsCtx.beginPath();
+                                    effectsCtx.arc(0, 0, waveSize, 0, Math.PI * 2);
+                                    effectsCtx.stroke();
+                                }
+                                break;
+                                
+                            case 'triangle':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(0, -size);
+                                effectsCtx.lineTo(-size * 0.866, size * 0.5);
+                                effectsCtx.lineTo(size * 0.866, size * 0.5);
+                                effectsCtx.closePath();
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'square':
+                                effectsCtx.fillRect(-size/2, -size/2, size, size);
+                                break;
+                                
+                            case 'hexagon':
+                                effectsCtx.beginPath();
+                                for (let j = 0; j < 6; j++) {
+                                    const angle = (j * Math.PI) / 3;
+                                    const x = Math.cos(angle) * size;
+                                    const y = Math.sin(angle) * size;
+                                    if (j === 0) effectsCtx.moveTo(x, y);
+                                    else effectsCtx.lineTo(x, y);
+                                }
+                                effectsCtx.closePath();
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'spiral':
+                                effectsCtx.beginPath();
+                                for (let j = 0; j < 100; j++) {
+                                    const angle = j * 0.1;
+                                    const radius = (j / 100) * size;
+                                    const x = Math.cos(angle) * radius;
+                                    const y = Math.sin(angle) * radius;
+                                    if (j === 0) effectsCtx.moveTo(x, y);
+                                    else effectsCtx.lineTo(x, y);
+                                }
+                                effectsCtx.stroke();
+                                break;
+                                
+                            case 'burst':
+                                for (let j = 0; j < 8; j++) {
+                                    const angle = (j * Math.PI) / 4;
+                                    const endX = Math.cos(angle) * size;
+                                    const endY = Math.sin(angle) * size;
+                                    effectsCtx.beginPath();
+                                    effectsCtx.moveTo(0, 0);
+                                    effectsCtx.lineTo(endX, endY);
+                                    effectsCtx.stroke();
+                                }
+                                break;
+                                
+                            case 'ripple':
+                                for (let j = 0; j < 3; j++) {
+                                    const rippleSize = size * (1 - j * 0.3);
+                                    effectsCtx.beginPath();
+                                    effectsCtx.arc(0, 0, rippleSize, 0, Math.PI * 2);
+                                    effectsCtx.stroke();
+                                }
+                                break;
+                                
+                            case 'star':
+                                effectsCtx.beginPath();
+                                for (let j = 0; j < 10; j++) {
+                                    const angle = (j * Math.PI) / 5;
+                                    const radius = j % 2 === 0 ? size : size * 0.5;
+                                    const x = Math.cos(angle) * radius;
+                                    const y = Math.sin(angle) * radius;
+                                    if (j === 0) effectsCtx.moveTo(x, y);
+                                    else effectsCtx.lineTo(x, y);
+                                }
+                                effectsCtx.closePath();
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'diamond':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(0, -size);
+                                effectsCtx.lineTo(size, 0);
+                                effectsCtx.lineTo(0, size);
+                                effectsCtx.lineTo(-size, 0);
+                                effectsCtx.closePath();
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'cross':
+                                effectsCtx.fillRect(-size/2, -size/6, size, size/3);
+                                effectsCtx.fillRect(-size/6, -size/2, size/3, size);
+                                break;
+                                
+                            case 'heart':
+                                effectsCtx.beginPath();
+                                const topCurveHeight = size * 0.3;
+                                effectsCtx.moveTo(0, topCurveHeight);
+                                effectsCtx.bezierCurveTo(0, 0, -size/2, 0, -size/2, topCurveHeight);
+                                effectsCtx.bezierCurveTo(-size/2, size/2, 0, size/2, 0, size);
+                                effectsCtx.bezierCurveTo(0, size/2, size/2, size/2, size/2, topCurveHeight);
+                                effectsCtx.bezierCurveTo(size/2, 0, 0, 0, 0, topCurveHeight);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'lightning':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(0, -size);
+                                effectsCtx.lineTo(-size/3, -size/3);
+                                effectsCtx.lineTo(size/3, -size/6);
+                                effectsCtx.lineTo(-size/6, size/6);
+                                effectsCtx.lineTo(size/6, size/3);
+                                effectsCtx.lineTo(0, size);
+                                effectsCtx.stroke();
+                                break;
+                                
+                            case 'flower':
+                                for (let j = 0; j < 6; j++) {
+                                    effectsCtx.save();
+                                    effectsCtx.rotate((j * Math.PI) / 3);
+                                    effectsCtx.beginPath();
+                                    effectsCtx.ellipse(0, -size/2, size/4, size/2, 0, 0, Math.PI * 2);
+                                    effectsCtx.fill();
+                                    effectsCtx.restore();
+                                }
+                                break;
+                                
+                            case 'gear':
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, 0, size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                for (let j = 0; j < 8; j++) {
+                                    const angle = (j * Math.PI) / 4;
+                                    const x = Math.cos(angle) * size;
+                                    const y = Math.sin(angle) * size;
+                                    effectsCtx.beginPath();
+                                    effectsCtx.arc(x, y, size/4, 0, Math.PI * 2);
+                                    effectsCtx.fill();
+                                }
+                                break;
+                                
+                            case 'crown':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(-size/2, size/2);
+                                effectsCtx.lineTo(-size/3, -size/2);
+                                effectsCtx.lineTo(-size/6, size/4);
+                                effectsCtx.lineTo(0, -size/2);
+                                effectsCtx.lineTo(size/6, size/4);
+                                effectsCtx.lineTo(size/3, -size/2);
+                                effectsCtx.lineTo(size/2, size/2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'arrow':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(0, -size);
+                                effectsCtx.lineTo(-size/3, -size/3);
+                                effectsCtx.lineTo(-size/6, -size/3);
+                                effectsCtx.lineTo(-size/6, size);
+                                effectsCtx.lineTo(size/6, size);
+                                effectsCtx.lineTo(size/6, -size/3);
+                                effectsCtx.lineTo(size/3, -size/3);
+                                effectsCtx.closePath();
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'shield':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(0, -size);
+                                effectsCtx.quadraticCurveTo(-size/2, -size/2, -size/2, 0);
+                                effectsCtx.quadraticCurveTo(-size/2, size/2, 0, size);
+                                effectsCtx.quadraticCurveTo(size/2, size/2, size/2, 0);
+                                effectsCtx.quadraticCurveTo(size/2, -size/2, 0, -size);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'moon':
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, 0, size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.fillStyle = 'var(--vscode-editor-background)';
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(size/3, 0, size * 0.8, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'sun':
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, 0, size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                for (let j = 0; j < 12; j++) {
+                                    const angle = (j * Math.PI) / 6;
+                                    const startX = Math.cos(angle) * size;
+                                    const startY = Math.sin(angle) * size;
+                                    const endX = Math.cos(angle) * (size + size/2);
+                                    const endY = Math.sin(angle) * (size + size/2);
+                                    effectsCtx.beginPath();
+                                    effectsCtx.moveTo(startX, startY);
+                                    effectsCtx.lineTo(endX, endY);
+                                    effectsCtx.stroke();
+                                }
+                                break;
+                                
+                            case 'leaf':
+                                effectsCtx.beginPath();
+                                effectsCtx.ellipse(0, 0, size/2, size, -Math.PI/4, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'butterfly':
+                                effectsCtx.beginPath();
+                                effectsCtx.ellipse(-size/3, 0, size/3, size/2, -Math.PI/6, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.beginPath();
+                                effectsCtx.ellipse(size/3, 0, size/3, size/2, Math.PI/6, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'x':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(-size/2, -size/2);
+                                effectsCtx.lineTo(size/2, size/2);
+                                effectsCtx.moveTo(size/2, -size/2);
+                                effectsCtx.lineTo(-size/2, size/2);
+                                effectsCtx.stroke();
+                                break;
+                                
+                            case 'yin-yang':
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, 0, size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.fillStyle = 'var(--vscode-editor-background)';
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, -size/2, size/2, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.fillStyle = effect.color;
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(0, size/2, size/2, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                break;
+                                
+                            case 'zigzag':
+                                effectsCtx.beginPath();
+                                effectsCtx.moveTo(-size/2, -size/2);
+                                effectsCtx.lineTo(-size/6, size/2);
+                                effectsCtx.lineTo(size/6, -size/2);
+                                effectsCtx.lineTo(size/2, size/2);
+                                effectsCtx.stroke();
+                                break;
+                        }
+                        
+                        effectsCtx.restore();
+                    }
+                    
+                    requestAnimationFrame(renderEffects);
+                }
+                
+                // Start effects rendering
+                renderEffects();
+                
+                // Clear all effects function
+                function clearAllEffects() {
+                    effects = [];
+                }
+                
+                // Add clear button
+                const clearButton = document.createElement('button');
+                clearButton.textContent = '清除动效';
+                clearButton.style.fontSize = '10px';
+                clearButton.style.padding = '2px 6px';
+                clearButton.style.marginLeft = '8px';
+                clearButton.addEventListener('click', clearAllEffects);
+                document.querySelector('.row').appendChild(clearButton);
+                
+                // Add test button
+                const testButton = document.createElement('button');
+                testButton.textContent = '测试动效';
+                testButton.style.fontSize = '10px';
+                testButton.style.padding = '2px 6px';
+                testButton.style.marginLeft = '8px';
+                testButton.addEventListener('click', () => {
+                    console.log('Test button clicked');
+                    createEffect('a');
+                });
+                document.querySelector('.row').appendChild(testButton);
 
                 function ensureAudioContext() {
                     if(ac) return;
@@ -546,9 +1067,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         if(audio.paused) {
                             await audio.play();
                             toggle.textContent = '暂停';
+                            vscode.postMessage({ command: 'audioResumed' });
                         } else {
                             audio.pause();
                             toggle.textContent = '播放';
+                            vscode.postMessage({ command: 'audioPaused' });
                         }
                     } catch(err) {
                         console.error('播放出错:', err);
@@ -567,12 +1090,22 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                                 audio.play().catch(console.error);
                             }
                             break;
+                        case 'keyPressed':
+                            console.log('Received keyPressed message:', m.key);
+                            createEffect(m.key);
+                            break;
                     }
                 });
 
                 audio.addEventListener('ended', () => {
                     vscode.postMessage({ command: 'audioEnded' });
                     toggle.textContent = '播放';
+                });
+                
+                // Add click event to test effect creation
+                effectsCanvas.addEventListener('click', (e) => {
+                    console.log('Canvas clicked, creating test effect');
+                    createEffect('a');
                 });
             </script>
         </body>
