@@ -14,14 +14,14 @@ class MusicPlayerPanel {
     private _currentAudio: string | undefined;
     private _playlists: { [key: string]: string[] } = {
         'deep_focus': [
-            'Since TMRW 始于明天 - 从忧伤到忧伤.mp3',
-            'Since TMRW 始于明天 - Love You.mp3'
+            'Team Astro - Better, Together, Forever.mp3',
+            '坂本龍一 - aqua.mp3',
         ],
         'energy': [
-            'Since TMRW 始于明天 - 自己骗自己.mp3'
+            'Pianoboy高至豪 - The truth that you leave.mp3'
         ],
         'creative': [
-            'Since TMRW 始于明天 - 幻象.mp3'
+            '조한빛 - Endless Path.mp3'
         ]
     };
 
@@ -313,14 +313,14 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
     private _isManuallyPaused: boolean = false;
     private _playlists: { [key: string]: string[] } = {
         'deep_focus': [
-            'Since TMRW 始于明天 - 从忧伤到忧伤.mp3',
-            'Since TMRW 始于明天 - Love You.mp3'
+            'Team Astro - Better, Together, Forever.mp3',
+            '坂本龍一 - aqua.mp3',
         ],
         'energy': [
-            'Since TMRW 始于明天 - 自己骗自己.mp3'
+            'Pianoboy高至豪 - The truth that you leave.mp3'
         ],
         'creative': [
-            'Since TMRW 始于明天 - 幻象.mp3'
+            '조한빛 - Endless Path.mp3'
         ]
     };
 
@@ -561,13 +561,14 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 .pad .label { z-index: 2; opacity: .9; }
                 .pad .light {
                     position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-                    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.08), rgba(0,0,0,0) 40%),
-                                linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02));
-                    opacity: 0; transition: opacity .12s ease, transform .2s ease; transform: scale(.6);
+                    background:
+                        radial-gradient(circle at 50% 50%, rgba(255,248,230,0.85) 0%, rgba(255,216,140,0.60) 12%, rgba(255,188,95,0.32) 26%, rgba(0,0,0,0) 50%);
+                    opacity: 0; transition: opacity .18s ease, transform .20s ease, filter .20s ease; transform: scale(.9);
                     filter: blur(10px);
                 }
-                .pad.active .light { opacity: .4; transform: scale(1); filter: blur(16px); }
-                .pad.hit { box-shadow: 0 6px 18px rgba(255,255,255,0.15); transform: scale(1.03); }
+                .pad.active .light { opacity: 0; }
+                .pad.hit .light { opacity: .95; transform: scale(1.08); filter: blur(16px); }
+                .pad.hit { box-shadow: 0 6px 18px rgba(0,0,0,0.35); transform: scale(1.03); }
                 .step {
                     height: 28px;
                     border-radius: 4px;
@@ -691,7 +692,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
                 let started = false;
                 let ac, analyser, src;
-                let padMaster;
+                let padMaster, padComp;
                 let padGain = 0.9;
                 
                 // Keyboard Effects System
@@ -803,11 +804,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     oscillator.frequency.setValueAtTime(frequencies[type], ac.currentTime);
                     oscillator.type = 'sine';
                     
-                    gainNode.gain.setValueAtTime(0.5, ac.currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.05, ac.currentTime + 0.5);
+                    gainNode.gain.setValueAtTime(0.3, ac.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.03, ac.currentTime + 0.3);
                     
                     oscillator.start(ac.currentTime);
-                    oscillator.stop(ac.currentTime + 0.5);
+                    oscillator.stop(ac.currentTime + 0.3);
                 }
                 
                 // Render effects
@@ -1167,7 +1168,15 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     analyser = ac.createAnalyser();
                     padMaster = ac.createGain();
                     padMaster.gain.value = padGain;
-                    padMaster.connect(ac.destination);
+                    // Gentle bus compression for punch and perceived loudness
+                    padComp = ac.createDynamicsCompressor();
+                    padComp.threshold.setValueAtTime(-18, ac.currentTime);
+                    padComp.knee.setValueAtTime(24, ac.currentTime);
+                    padComp.ratio.setValueAtTime(3, ac.currentTime);
+                    padComp.attack.setValueAtTime(0.003, ac.currentTime);
+                    padComp.release.setValueAtTime(0.25, ac.currentTime);
+                    padMaster.connect(padComp);
+                    padComp.connect(ac.destination);
                     analyser.fftSize = 256;
                     const bufferLength = analyser.frequencyBinCount;
                     const dataArray = new Uint8Array(bufferLength);
@@ -1349,6 +1358,13 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         playEtherealChord(time, chord);
                         return;
                     }
+                    // First row: three distinct kick flavors
+                    if (row === 0) {
+                        if (col === 0) { playKick(time, 1.25, 'tight'); return; }
+                        if (col === 1) { playKick(time, 1.3, 'round'); return; }
+                        if (col === 2) { playKick(time, 1.35, 'deep'); return; }
+                        // col 3 is handled by chord block above
+                    }
                     // Row-specific mapping: row 1 (second row) columns 0..2 are cymbal/drum voices
                     if (row === 1) {
                         if (col === 0) { playCrash(time); return; }
@@ -1529,43 +1545,75 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     osc1.start(time); osc2.start(time);
                     osc1.stop(time + 0.7); osc2.stop(time + 0.7);
                 }
-                function playKick(time) {
+                function playKick(time, levelMul = 1.0, variant = 'round') {
+                    // variant knobs
+                    const v = {
+                        'tight': { fStart: 190, fEnd: 44, sweep: 0.18, lp: 1400, atk: 0.001, dec: 0.18, clickHz: 2800, clickPeak: 0.7 },
+                        'round': { fStart: 170, fEnd: 36, sweep: 0.22, lp: 1200, atk: 0.0015, dec: 0.26, clickHz: 2000, clickPeak: 0.9 },
+                        'deep':  { fStart: 150, fEnd: 30, sweep: 0.28, lp: 1000, atk: 0.002, dec: 0.3,  clickHz: 1800, clickPeak: 0.8 }
+                    }[variant] || { fStart: 170, fEnd: 36, sweep: 0.22, lp: 1200, atk: 0.0015, dec: 0.26, clickHz: 2000, clickPeak: 0.9 };
+                    // Body with pitch sweep and gentle saturation
                     const osc = ac.createOscillator();
-                    const gain = envAD(padMaster, time, 0.002, 0.2, 1.05, 0.0001);
                     osc.type = 'sine';
-                    osc.frequency.setValueAtTime(140, time);
-                    osc.frequency.exponentialRampToValueAtTime(40, time + 0.18);
-                    osc.connect(gain);
-                    osc.start(time);
-                    osc.stop(time + 0.22);
+                    osc.frequency.setValueAtTime(v.fStart, time);
+                    osc.frequency.exponentialRampToValueAtTime(v.fEnd, time + v.sweep);
+                    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = v.lp;
+                    const shaper = ac.createWaveShaper();
+                    (function(){ const n=1024, c=new Float32Array(n), k=2.0; for(let i=0;i<n;i++){ const x=i/n*2-1; c[i]=(1+k)*x/(1+k*Math.abs(x)); } shaper.curve=c; })();
+                    const g = envAD(padMaster, time, v.atk, v.dec, 1.2 * levelMul, 0.0001);
+                    osc.connect(lp).connect(shaper).connect(g);
+                    osc.start(time); osc.stop(time + Math.max(0.2, v.sweep + 0.06));
+                    // Click transient
+                    const click = ac.createBufferSource();
+                    const buf = ac.createBuffer(1, ac.sampleRate * 0.015, ac.sampleRate);
+                    const d = buf.getChannelData(0);
+                    for (let i = 0; i < d.length; i++) { d[i] = (Math.random() * 2 - 1) * (1 - i / d.length); }
+                    click.buffer = buf;
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = v.clickHz;
+                    const gClick = envAD(padMaster, time, 0.0005, 0.04, v.clickPeak * levelMul, 0.0001);
+                    click.connect(hp).connect(gClick);
+                    click.start(time); click.stop(time + 0.02);
                 }
                 function playSnare(time) {
+                    // Noise layer for sizzle
                     const noise = ac.createBufferSource();
-                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.2, ac.sampleRate);
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.25, ac.sampleRate);
                     const data = buffer.getChannelData(0);
                     for (let i = 0; i < data.length; i++) { data[i] = (Math.random() * 2 - 1) * (1 - i / data.length); }
                     noise.buffer = buffer;
-                    const g = envAD(padMaster, time, 0.001, 0.14, 0.95, 0.0001);
-                    const bp = ac.createBiquadFilter();
-                    bp.type = 'bandpass';
-                    bp.frequency.value = 1800;
-                    noise.connect(bp).connect(g);
-                    noise.start(time);
-                    noise.stop(time + 0.2);
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1200;
+                    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+                    const gN = envAD(padMaster, time, 0.001, 0.16, 1.0, 0.0001);
+                    noise.connect(hp).connect(bp).connect(gN);
+                    noise.start(time); noise.stop(time + 0.22);
+                    // Tonal body for punch
+                    const body = ac.createOscillator(); body.type = 'triangle';
+                    body.frequency.setValueAtTime(190, time);
+                    body.frequency.exponentialRampToValueAtTime(160, time + 0.08);
+                    const bp2 = ac.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 180; bp2.Q.value = 1.2;
+                    const gT = envAD(padMaster, time, 0.001, 0.12, 0.6, 0.0001);
+                    body.connect(bp2).connect(gT);
+                    body.start(time); body.stop(time + 0.15);
                 }
                 function playHat(time) {
+                    // Noise for broad shimmer
                     const noise = ac.createBufferSource();
-                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.06, ac.sampleRate);
                     const data = buffer.getChannelData(0);
                     for (let i = 0; i < data.length; i++) { data[i] = Math.random() * 2 - 1; }
                     noise.buffer = buffer;
-                    const hp = ac.createBiquadFilter();
-                    hp.type = 'highpass';
-                    hp.frequency.value = 8000;
-                    const g = envAD(padMaster, time, 0.001, 0.07, 0.7, 0.0001);
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 8000;
+                    const g = envAD(padMaster, time, 0.0005, 0.05, 0.85, 0.0001);
                     noise.connect(hp).connect(g);
-                    noise.start(time);
-                    noise.stop(time + 0.05);
+                    noise.start(time); noise.stop(time + 0.06);
+                    // Metallic partials for definition
+                    [10000, 12000, 14000].forEach((f, i) => {
+                        const osc = ac.createOscillator(); osc.type = 'square'; osc.frequency.value = f;
+                        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 8;
+                        const gP = envAD(padMaster, time, 0.0005, 0.04 + i * 0.01, 0.25, 0.0001);
+                        osc.connect(bp).connect(gP);
+                        osc.start(time); osc.stop(time + 0.06 + i * 0.01);
+                    });
                 }
                 function playOpenHat(time) {
                     const noise = ac.createBufferSource();
@@ -1625,8 +1673,8 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         noise.buffer = buffer;
                         const hp = ac.createBiquadFilter();
                         hp.type = 'highpass';
-                        hp.frequency.value = 1200;
-                        const g = envAD(padMaster, time + offset, 0.005, 0.1, 0.85, 0.0001);
+                        hp.frequency.value = 1500;
+                        const g = envAD(padMaster, time + offset, 0.004, 0.11, 1.05, 0.0001);
                         noise.connect(hp).connect(g);
                         noise.start(time + offset);
                         noise.stop(time + offset + 0.06);
