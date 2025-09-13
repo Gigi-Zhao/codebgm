@@ -486,11 +486,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     opacity: 0.8;
                 }
                 button { 
-                    padding: 4px 10px;
+                    padding: 3px 8px;
                     background: var(--vscode-button-background);
                     color: var(--vscode-button-foreground);
                     border: none;
-                    border-radius: 2px;
+                    border-radius: 4px;
                     cursor: pointer;
                 }
                 button:hover {
@@ -517,25 +517,17 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     border-radius: 6px;
                     background: rgba(127,127,127,0.05);
                 }
-                .pad-header {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 8px;
-                    margin-bottom: 8px;
-                }
-                .pad-title {
-                    font-size: 12px;
-                    opacity: 0.85;
-                }
-                .pad-controls { display: flex; align-items: center; gap: 8px; }
-                .pad-controls .tempo {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    font-size: 11px;
-                    opacity: 0.8;
-                }
+                .pad-header { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; margin-bottom: 8px; }
+                .pad-left { display: flex; flex-direction: column; gap: 6px; }
+                .brand { font-size: 14px; font-weight: 700; letter-spacing: 0.4px; opacity: .9; }
+                .pad-controls { display: contents; }
+                .transport { display: flex; align-items: center; gap: 6px; }
+                .transport button { padding: 2px 8px; font-size: 11px; border-radius: 4px; }
+                .pad-right { display: flex; flex-direction: column; gap: 6px; }
+                .kv { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; font-size: 11px; opacity: 0.9; }
+                .kv label { white-space: nowrap; }
+                .kv input[type="range"] { width: 100%; }
+                .kv span { min-width: 38px; text-align: right; opacity: .8; }
                 .grid-wrapper { overflow-x: auto; }
                 .pads-grid {
                     display: grid;
@@ -597,7 +589,6 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 }
                 .thin-note { height: 22px; opacity: 0.8; }
                 .transport { display: flex; align-items: center; gap: 8px; }
-                .transport .toggle { min-width: 64px; }
                 .sequencer { margin-top: 8px; }
                 .steps { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; }
                 audio { 
@@ -613,29 +604,29 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 </div>
                 <div class="row">
                     <span class="status" style="font-size: 10px; opacity: 0.6;">按 A-Z 键触发动效</span>
+                    <button id="effectsToggle" title="开关打字动效与音效" style="padding:2px 8px;font-size:11px;">动效开</button>
                 </div>
                 <canvas id="viz"></canvas>
                 <canvas id="effectsCanvas"></canvas>
                 <div class="pad-section" id="padSection">
                     <div class="pad-header">
-                        <span class="pad-title">打击垫（4×4，16步循环）</span>
-                        <div class="pad-controls">
+                        <div class="pad-left">
+                            <span class="brand">LaunchPAD</span>
                             <div class="transport">
-                                <button class="toggle" id="seqToggle">开始</button>
-                                <button id="seqClear">清空</button>
+                                <button class="toggle" id="seqToggle">start</button>
+                                <button id="seqClear">clear</button>
                             </div>
-                            <div class="tempo">
-                                <label for="tempo">速度</label>
+                        </div>
+                        <div class="pad-right">
+                            <div class="kv">
+                                <label for="tempo">BPM</label>
                                 <input id="tempo" type="range" min="60" max="180" value="120" />
-                                <span id="tempoVal">120 BPM</span>
+                                <span id="tempoVal">120</span>
                             </div>
-                            <div class="tempo">
-                                <label for="padVol">音量</label>
+                            <div class="kv">
+                                <label for="padVol">Volume</label>
                                 <input id="padVol" type="range" min="0" max="150" value="90" />
                                 <span id="padVolVal">90%</span>
-                            </div>
-                            <div class="tempo">
-                                <span>Step: <span id="stepIndex">-</span></span>
                             </div>
                         </div>
                     </div>
@@ -657,6 +648,9 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 const ctx = canvas.getContext('2d');
                 const effectsCanvas = document.getElementById('effectsCanvas');
                 const effectsCtx = effectsCanvas.getContext('2d');
+                const effectsToggle = document.getElementById('effectsToggle');
+                let effectsEnabled = true;
+                function updateEffectsToggleLabel(){ if(effectsToggle) effectsToggle.textContent = effectsEnabled ? '动效开' : '动效关'; }
                 // Drum pad elements
                 const padsGrid = document.getElementById('padsGrid');
                 const stepsDiv = document.getElementById('steps');
@@ -689,6 +683,32 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 }
                 resizeCanvas();
                 window.addEventListener('resize', resizeCanvas);
+                // restore effectsEnabled from state if available
+                try {
+                    const st = vscode.getState && vscode.getState();
+                    if (st && typeof st.effectsEnabled === 'boolean') {
+                        effectsEnabled = st.effectsEnabled;
+                    }
+                } catch {}
+                updateEffectsToggleLabel();
+                if (effectsToggle) {
+                    effectsToggle.addEventListener('click', () => {
+                        effectsEnabled = !effectsEnabled;
+                        if (!effectsEnabled) {
+                            // clear any existing visual effects when turning off
+                            effects = [];
+                            try {
+                                const rect = effectsCanvas.getBoundingClientRect();
+                                effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                            } catch {}
+                        }
+                        updateEffectsToggleLabel();
+                        try {
+                            const st = vscode.getState() || {};
+                            vscode.setState({ ...st, effectsEnabled });
+                        } catch {}
+                    });
+                }
 
                 let started = false;
                 let ac, analyser, src;
@@ -1223,8 +1243,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                             }
                             break;
                         case 'keyPressed':
-                            console.log('Received keyPressed message:', m.key);
-                            createEffect(m.key);
+                            if (effectsEnabled) {
+                                console.log('Received keyPressed message:', m.key);
+                                createEffect(m.key);
+                            }
                             break;
                     }
                 });
@@ -1406,7 +1428,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     for (let i = 0; i < PADS; i++) if (patterns[i][stepIndex]) triggerPad(i, time);
                     // Visuals
                     requestAnimationFrame(() => {
-                        stepIndexEl.textContent = String(stepIndex + 1);
+                        if (stepIndexEl) stepIndexEl.textContent = String(stepIndex + 1);
                         const stepNodes = stepsDiv.querySelectorAll('.step');
                         stepNodes.forEach((n, idx) => n.classList.toggle('playing', idx === stepIndex));
                         // Pulse active pads (retrigger animation even at high BPM)
@@ -1426,7 +1448,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     ensureAudioContext();
                     if (isRunning) return;
                     isRunning = true;
-                    seqToggle.textContent = '停止';
+                    seqToggle.textContent = 'stop';
                     currentStep = 0;
                     nextNoteTime = ac.currentTime + 0.05;
                     scheduleTimer = setInterval(scheduler, 25);
@@ -1434,10 +1456,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 function stopSequencer() {
                     if (!isRunning) return;
                     isRunning = false;
-                    seqToggle.textContent = '开始';
+                    seqToggle.textContent = 'start';
                     if (scheduleTimer) { clearInterval(scheduleTimer); scheduleTimer = null; }
                     stepsDiv.querySelectorAll('.step.playing').forEach(n => n.classList.remove('playing'));
-                    stepIndexEl.textContent = '-';
+                    if (stepIndexEl) stepIndexEl.textContent = '-';
                 }
                 seqToggle.addEventListener('click', () => { if (!isRunning) startSequencer(); else stopSequencer(); });
                 seqClear.addEventListener('click', () => {
@@ -1667,6 +1689,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 
                 // Add click event to test effect creation
                 effectsCanvas.addEventListener('click', (e) => {
+                    if (!effectsEnabled) return;
                     console.log('Canvas clicked, creating test effect');
                     createEffect('a');
                 });
