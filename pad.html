@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>4x4 Drum Pad</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <style>
+    body {
+      background: #111;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      font-family: sans-serif;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 100px);
+      grid-gap: 12px;
+    }
+    .pad {
+      width: 100px;
+      height: 100px;
+      border-radius: 12px;
+      background: #333;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.1s;
+    }
+    .pad.active {
+      background: #ff4757;
+      box-shadow: 0 0 20px #ff6b81;
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body>
+  <div class="grid" id="grid"></div>
+
+  <script>
+    // 定义16个Pad对应的声音
+    const samples = {
+      1: "https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3",
+      2: "https://tonejs.github.io/audio/drum-samples/CR78/snare.mp3",
+      3: "https://tonejs.github.io/audio/drum-samples/CR78/clap.mp3",
+      4: "https://tonejs.github.io/audio/drum-samples/CR78/tom.mp3",
+      5: "https://tonejs.github.io/audio/drum-samples/CR78/hihat.mp3",
+      6: "https://tonejs.github.io/audio/drum-samples/CR78/hihat-open.mp3",
+      7: "https://tonejs.github.io/audio/drum-samples/CR78/ride.mp3",
+      8: "https://tonejs.github.io/audio/drum-samples/CR78/cowbell.mp3",
+      9: "https://tonejs.github.io/audio/drum-samples/CR78/conga.mp3",
+      10: "https://tonejs.github.io/audio/drum-samples/CR78/claves.mp3",
+      11: "https://tonejs.github.io/audio/drum-samples/CR78/shaker.mp3",
+      12: "https://tonejs.github.io/audio/drum-samples/CR78/triangle.mp3",
+      13: "https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3",
+      14: "https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3",
+      15: "https://tonejs.github.io/audio/drum-samples/CR78/snare.mp3",
+      16: "https://tonejs.github.io/audio/drum-samples/CR78/crash.mp3"
+    };
+
+    const grid = document.getElementById("grid");
+    const players = new Tone.Players(samples).toDestination();
+
+    // 创建16个pad
+    for (let i = 1; i <= 16; i++) {
+      const pad = document.createElement("div");
+      pad.className = "pad";
+      pad.innerText = i;
+      pad.dataset.index = i;
+      pad.addEventListener("click", () => triggerPad(i, pad));
+      grid.appendChild(pad);
+    }
+
+    function triggerPad(index, pad) {
+      players.player(index).start();
+      pad.classList.add("active");
+      setTimeout(() => pad.classList.remove("active"), 150);
+    }
+
+    // 绑定键盘 (QWER / ASDF / ZXCV / 1234)
+    const keyMap = {
+      'q':1,'w':2,'e':3,'r':4,
+      'a':5,'s':6,'d':7,'f':8,
+      'z':9,'x':10,'c':11,'v':12,
+      '1':13,'2':14,'3':15,'4':16
+    };
+    document.addEventListener("keydown", e => {
+      const idx = keyMap[e.key];
+      if (idx) {
+        const pad = document.querySelector(`.pad[data-index='${idx}']`);
+        triggerPad(idx, pad);
+      }
+    });
+  </script>
+</body>
+</html>

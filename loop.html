@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>打击垫 Loop Demo</title>
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.8.39/build/Tone.js"></script>
+  <style>
+    :root{
+      --bg:#080812;
+      --pad:#11121a;
+      --pad-active:#ffb86b;
+      --pad-hit:#ffffff;
+      --accent:#7ee7ff;
+      --panel:#0b0b12;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);font-family:Inter,Arial;color:#e6eef6;}
+    .wrap{max-width:980px;margin:28px auto;padding:20px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+    h1{font-size:18px;margin:0}
+    .controls{display:flex;gap:10px;align-items:center}
+    button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;padding:8px 12px;border-radius:8px;cursor:pointer}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#8affc1);color:#001;}
+    .row{display:flex;gap:14px}
+    .left{flex:1}
+    .right{width:340px}
+    .pad-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px;background:var(--panel);border-radius:10px}
+    .pad{
+      background:var(--pad);
+      border-radius:10px;
+      aspect-ratio:1/1;
+      display:flex;align-items:center;justify-content:center;
+      font-weight:700;color:rgba(255,255,255,0.9);
+      position:relative;overflow:hidden;cursor:pointer;
+      box-shadow: inset 0 -6px 20px rgba(0,0,0,0.6), 0 4px 18px rgba(0,0,0,0.6);
+      transition:transform .12s ease, box-shadow .12s ease;
+    }
+    .pad:active{ transform: scale(.98); }
+    .pad .label{z-index:2}
+    .pad .light{
+      position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.08), rgba(0,0,0,0) 40%),
+                  linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02));
+      opacity:0;transition:opacity .12s ease, transform .2s ease;
+      transform: scale(.6);
+      filter: blur(10px);
+    }
+    .pad.active .light{ opacity: .45; transform: scale(1); background: radial-gradient(circle at 30% 30%, var(--pad-active), rgba(0,0,0,0) 40%); filter: blur(18px);}
+    .pad.hit{ box-shadow: 0 8px 30px rgba(255,200,120,0.25); transform: scale(1.06); }
+    .sequencer{margin-top:12px;background:#07071a;padding:10px;border-radius:8px}
+    .steps{display:grid;grid-template-columns:repeat(16,1fr);gap:6px}
+    .step{
+      height:28px;background:rgba(255,255,255,0.03);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;
+      color:rgba(255,255,255,0.35);
+    }
+    .step.playing{background:linear-gradient(90deg, rgba(126,231,255,0.15), rgba(138,255,193,0.06)); color:var(--accent); box-shadow:0 6px 18px rgba(0,0,0,0.6);}
+    .pad-row{display:flex;gap:10px;margin-top:10px}
+    .pad-row .pad{flex:1}
+    .meta{font-size:13px;color:rgba(255,255,255,0.7)}
+    label{display:block;font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:6px}
+    input[type=range]{width:100%}
+    .small{font-size:12px;color:rgba(255,255,255,0.6)}
+    footer{margin-top:12px;text-align:right;font-size:12px;color:rgba(255,255,255,0.45)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>打击垫 Loop Demo — 点击触发 & 16-step Loop</h1>
+      <div class="controls">
+        <button id="startBtn" class="btn-primary">Start</button>
+        <button id="stopBtn">Stop</button>
+        <button id="clearBtn">Clear</button>
+        <div class="small">BPM <input id="bpm" type="range" min="60" max="160" value="110" /></div>
+      </div>
+    </header>
+
+    <div class="row">
+      <div class="left">
+        <div class="pad-grid" id="padGrid"></div>
+
+        <div class="sequencer">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="meta">Sequencer (16 Steps)</div>
+            <div class="meta">Step: <span id="stepIndex">-</span></div>
+          </div>
+          <div class="steps" id="steps"></div>
+          <div style="margin-top:10px" class="small">点击 Pad 即时触发声音；选中步骤代表该 Pad 在对应 step 被触发。</div>
+        </div>
+      </div>
+
+      <div class="right">
+        <div style="background:var(--panel);padding:12px;border-radius:10px">
+          <div class="meta">音色与参数</div>
+          <div style="margin-top:10px">
+            <label>主音量</label>
+            <input id="masterVol" type="range" min="-30" max="0" value="-6" />
+          </div>
+          <div style="margin-top:10px">
+            <label>Pad 音色选择</label>
+            <select id="kitSelect" style="width:100%;padding:8px;border-radius:8px;background:#0b0b12;color:#fff">
+              <option value="acoustic">Acoustic Kit</option>
+              <option value="electro">Electro Kit</option>
+              <option value="synth">Synth Kit</option>
+            </select>
+          </div>
+          <div style="margin-top:10px">
+            <label>播放模式</label>
+            <div style="display:flex;gap:8px">
+              <button id="playToggle">Loop: Off</button>
+              <button id="randomize">Randomize Pattern</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;background:var(--panel);padding:12px;border-radius:10px">
+          <div class="meta">提示</div>
+          <ul style="margin:8px 0 0 16px;color:rgba(255,255,255,0.65)">
+            <li>首次播放需点击 Start 激活音频。</li>
+            <li>点击 Pad 为即时触发并切换 Pad 的“行”步序开关（单列16步）。</li>
+            <li>调整 BPM 改变循环速度。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <footer>由 Tone.js 驱动 • 适合做 Vibe Coding 的节奏伴奏原型</footer>
+  </div>
+
+<script>
+  // ====== 基本设置 ======
+  const PAD_COLS = 4, PAD_ROWS = 4;
+  const STEPS = 16;
+
+  // Tone.js instruments (kits)
+  let masterVol = new Tone.Volume(-6).toDestination();
+  Tone.Destination.volume.value = 0;
+  const kits = {
+    acoustic: createAcousticKit(),
+    electro: createElectroKit(),
+    synth: createSynthKit()
+  };
+  let currentKit = kits.acoustic;
+
+  // Sequencer state: for each pad row-index (0..15) we keep an array of STEPS booleans
+  const patterns = [];
+  for (let i=0;i<PAD_ROWS*PAD_COLS;i++){
+    patterns.push(new Array(STEPS).fill(false));
+  }
+
+  // UI refs
+  const padGrid = document.getElementById('padGrid');
+  const stepsDiv = document.getElementById('steps');
+  const stepIndexEl = document.getElementById('stepIndex');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const bpmSlider = document.getElementById('bpm');
+  const playToggle = document.getElementById('playToggle');
+  const randomizeBtn = document.getElementById('randomize');
+  const kitSelect = document.getElementById('kitSelect');
+  const masterVolSlider = document.getElementById('masterVol');
+
+  // Build pad UI
+  const padEls = [];
+  for (let i=0;i<PAD_ROWS*PAD_COLS;i++){
+    const el = document.createElement('div');
+    el.className = 'pad';
+    el.dataset.idx = i;
+    el.innerHTML = `<div class="label">PAD ${i+1}</div><div class="light"></div>`;
+    padGrid.appendChild(el);
+    padEls.push(el);
+  }
+
+  // Build steps UI (visual only)
+  for (let s=0;s<STEPS;s++){
+    const st = document.createElement('div');
+    st.className = 'step';
+    st.dataset.step = s;
+    st.textContent = s+1;
+    stepsDiv.appendChild(st);
+  }
+
+  // ====== 音色与合成器工厂 ======
+  function createAcousticKit(){
+    // Membrane for kick, Noise for snare, synth for hat-ish tone
+    return {
+      trigger: (padIdx, time) => {
+        // map pad index to some instrument
+        const type = padIdx % 4;
+        if (type === 0) {
+          const k = new Tone.MembraneSynth({pitchDecay:0.08,octaves:4,envelope:{attack:0.001,decay:0.4,sustain:0}}).connect(masterVol);
+          k.triggerAttackRelease('C2','8n', time);
+        } else if (type === 1) {
+          const sn = new Tone.NoiseSynth({noise:{type:'white'},envelope:{attack:0.001,decay:0.3}}).connect(masterVol);
+          sn.triggerAttackRelease('16n', time);
+        } else if (type === 2) {
+          const click = new Tone.MetalSynth({frequency:120,envelope:{attack:0.001,decay:0.12,release:0.1}}).connect(masterVol);
+          click.triggerAttackRelease('16n', time);
+        } else {
+          const sub = new Tone.Synth({oscillator:{type:'triangle'},envelope:{attack:0.001,decay:0.2,sustain:0.2,release:0.3}}).connect(masterVol);
+          const note = ['C3','E3','G3','A3'][Math.floor(Math.random()*4)];
+          sub.triggerAttackRelease(note,'8n', time);
+        }
+      }
+    };
+  }
+
+  function createElectroKit(){
+    return {
+      trigger: (padIdx, time) => {
+        const osc = new Tone.FMSynth({harmonicity:3,modulationIndex:12,envelope:{attack:0.001,decay:0.2,sustain:0}}).connect(masterVol);
+        const notes = ['G3','A3','B3','D4','E4'];
+        osc.triggerAttackRelease(notes[padIdx%notes.length],'8n', time);
+      }
+    };
+  }
+
+  function createSynthKit(){
+    return {
+      trigger: (padIdx, time) => {
+        const drum = new Tone.PluckSynth({damping:0.8}).connect(masterVol);
+        const scale = ['C4','D4','E4','G4','A4'];
+        drum.triggerAttackRelease(scale[padIdx%scale.length], '16n', time);
+      }
+    };
+  }
+
+  // ====== immediate play & pad interactions ======
+  padEls.forEach((el, idx) => {
+    // click toggles the pad's pattern for the current step snapshot (we'll toggle step under cursor when clicking on a pad while not playing)
+    el.addEventListener('click', async (ev) => {
+      await ensureAudioStarted();
+      // immediate trigger sound
+      currentKit.trigger(idx, Tone.now());
+      flashPad(idx);
+      // toggle all pattern steps for demo OR toggle current step if playing
+      if (isPlaying) {
+        // toggle pattern at currentStep
+        patterns[idx][currentStep] = !patterns[idx][currentStep];
+      } else {
+        // toggle first step as convenience
+        patterns[idx][0] = !patterns[idx][0];
+      }
+      renderPatternUI();
+    });
+  });
+
+  function flashPad(idx){
+    const el = padEls[idx];
+    el.classList.add('hit');
+    setTimeout(()=>el.classList.remove('hit'), 180);
+    // also briefly show active light
+    el.classList.add('active');
+    setTimeout(()=>el.classList.remove('active'), 420);
+  }
+
+  // ====== Sequencer core (Tone.Transport) ======
+  Tone.Transport.bpm.value = parseInt(bpmSlider.value);
+  let currentStep = 0;
+  let isPlaying = false;
+  const repeatId = Tone.Transport.scheduleRepeat((time) => {
+    // at each 16th note step
+    // highlight step UI
+    const stepEls = document.querySelectorAll('.step');
+    stepEls.forEach(el=>el.classList.remove('playing'));
+    const activeStepEl = document.querySelector(`.step[data-step="${currentStep}"]`);
+    if (activeStepEl) activeStepEl.classList.add('playing');
+    stepIndexEl.textContent = currentStep + 1;
+
+    // trigger each pad whose pattern has this step
+    patterns.forEach((pat, padIdx) => {
+      if (pat[currentStep]) {
+        currentKit.trigger(padIdx, time);
+        // visual: pulse pad when its step triggers
+        const padEl = padEls[padIdx];
+        padEl.classList.add('hit');
+        padEl.classList.add('active');
+        setTimeout(()=>{ padEl.classList.remove('hit'); padEl.classList.remove('active'); }, 200);
+      }
+    });
+
+    currentStep = (currentStep + 1) % STEPS;
+  }, '16n');
+
+  // initially disable scheduling; we start/stop transport on user actions
+  Tone.Transport.pause();
+
+  // ====== controls ======
+  startBtn.addEventListener('click', async () => {
+    await ensureAudioStarted();
+    if (!isPlaying) {
+      currentStep = 0;
+      Tone.Transport.start();
+      isPlaying = true;
+      playToggle.textContent = 'Loop: On';
+    }
+  });
+  stopBtn.addEventListener('click', () => {
+    Tone.Transport.stop();
+    isPlaying = false;
+    playToggle.textContent = 'Loop: Off';
+    // clear step highlights
+    document.querySelectorAll('.step').forEach(el=>el.classList.remove('playing'));
+    stepIndexEl.textContent = '-';
+  });
+  clearBtn.addEventListener('click', () => {
+    for (let i=0;i<patterns.length;i++) patterns[i].fill(false);
+    renderPatternUI();
+  });
+
+  bpmSlider.addEventListener('input', () => {
+    const v = parseInt(bpmSlider.value);
+    Tone.Transport.bpm.rampTo(v, 0.1);
+  });
+
+  kitSelect.addEventListener('change', () => {
+    const v = kitSelect.value;
+    currentKit = kits[v];
+  });
+
+  masterVolSlider.addEventListener('input', () => {
+    masterVol.volume.value = parseInt(masterVolSlider.value);
+  });
+
+  playToggle.addEventListener('click', () => {
+    if (isPlaying) {
+      Tone.Transport.stop();
+      isPlaying = false;
+      playToggle.textContent = 'Loop: Off';
+    } else {
+      Tone.Transport.start();
+      isPlaying = true;
+      playToggle.textContent = 'Loop: On';
+    }
+  });
+
+  randomizeBtn.addEventListener('click', () => {
+    for (let i=0;i<patterns.length;i++){
+      for (let s=0;s<STEPS;s++){
+        patterns[i][s] = Math.random() < 0.18;
+      }
+    }
+    renderPatternUI();
+  });
+
+  // clicking on step toggles pattern for all pads at that step (for editing)
+  stepsDiv.addEventListener('click', (ev) => {
+    const st = ev.target.closest('.step');
+    if (!st) return;
+    const s = parseInt(st.dataset.step);
+    // toggle every pad's step (use SHIFT to toggle a single pad?)
+    const selectingPadIdx = null; // future: get selected row
+    for (let i=0;i<patterns.length;i++){
+      patterns[i][s] = !patterns[i][s];
+    }
+    renderPatternUI();
+  });
+
+  // render pattern UI by overlaying lights on pads according to patterns at current step 0
+  function renderPatternUI(){
+    // as simple visual, if any step[0] true -> show pad active
+    padEls.forEach((el, idx) => {
+      const anyActive = patterns[idx].some(v=>v);
+      if (anyActive) el.classList.add('active'); else el.classList.remove('active');
+    });
+    // optionally color steps by aggregated activity
+    const stepEls = document.querySelectorAll('.step');
+    stepEls.forEach((st, s) => {
+      let count=0;
+      for (let i=0;i<patterns.length;i++) if (patterns[i][s]) count++;
+      st.style.opacity = 0.2 + Math.min(1, count / 6);
+      st.textContent = (s+1);
+    });
+  }
+  renderPatternUI();
+
+  // ensure audio context started on first user gesture
+  let audioStarted = false;
+  async function ensureAudioStarted(){
+    if (!audioStarted) {
+      await Tone.start(); // must be user gesture
+      audioStarted = true;
+      console.log('Audio started');
+    }
+  }
+
+  // keyboard shortcuts: space toggles play
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (isPlaying) { Tone.Transport.stop(); isPlaying=false; playToggle.textContent='Loop: Off'; }
+      else { Tone.Transport.start(); isPlaying=true; playToggle.textContent='Loop: On'; }
+    }
+  });
+
+  // 初始化 master volume value
+  masterVol.volume.value = parseInt(masterVolSlider.value);
+</script>
+</body>
+</html>

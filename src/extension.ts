@@ -509,6 +509,96 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     border-radius: 2px;
                     margin-top: 8px;
                 }
+                /* Drum pad styles */
+                .pad-section {
+                    margin-top: 6px;
+                    padding: 8px;
+                    border: 1px solid var(--vscode-input-border, rgba(255,255,255,0.1));
+                    border-radius: 6px;
+                    background: rgba(127,127,127,0.05);
+                }
+                .pad-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 8px;
+                    margin-bottom: 8px;
+                }
+                .pad-title {
+                    font-size: 12px;
+                    opacity: 0.85;
+                }
+                .pad-controls { display: flex; align-items: center; gap: 8px; }
+                .pad-controls .tempo {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    font-size: 11px;
+                    opacity: 0.8;
+                }
+                .grid-wrapper { overflow-x: auto; }
+                .pads-grid {
+                    display: grid;
+                    grid-template-columns: repeat(4, 1fr);
+                    gap: 8px;
+                }
+                .pad {
+                    background: color-mix(in srgb, var(--vscode-editor-inactiveSelectionBackground) 70%, transparent);
+                    border-radius: 8px;
+                    aspect-ratio: 1 / 1;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    position: relative;
+                    cursor: pointer;
+                    user-select: none;
+                    box-shadow: inset 0 -6px 16px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.25);
+                    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+                    color: var(--vscode-foreground);
+                    font-size: 11px;
+                }
+                .pad:active { transform: scale(.98); }
+                .pad .label { z-index: 2; opacity: .9; }
+                .pad .light {
+                    position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+                    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.08), rgba(0,0,0,0) 40%),
+                                linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.02));
+                    opacity: 0; transition: opacity .12s ease, transform .2s ease; transform: scale(.6);
+                    filter: blur(10px);
+                }
+                .pad.active .light { opacity: .4; transform: scale(1); filter: blur(16px); }
+                .pad.hit { box-shadow: 0 6px 18px rgba(255,255,255,0.15); transform: scale(1.03); }
+                .step {
+                    height: 28px;
+                    border-radius: 4px;
+                    background: rgba(255,255,255,0.06);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    cursor: pointer;
+                    position: relative;
+                    transition: transform 60ms ease, box-shadow 120ms ease, background 120ms ease;
+                }
+                .step.active {
+                    background: rgba(100, 180, 255, 0.25);
+                    box-shadow: 0 0 0 1px rgba(100,180,255,0.4) inset, 0 0 10px rgba(100,180,255,0.3);
+                }
+                .step.playing::after {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    border-radius: 4px;
+                    box-shadow: 0 0 0 2px rgba(255,255,255,0.25) inset, 0 0 12px rgba(255,255,255,0.2);
+                    animation: pulse 220ms ease-out;
+                }
+                .step:active { transform: scale(0.98); }
+                @keyframes pulse {
+                    from { opacity: 1; }
+                    to { opacity: 0; }
+                }
+                .thin-note { height: 22px; opacity: 0.8; }
+                .transport { display: flex; align-items: center; gap: 8px; }
+                .transport .toggle { min-width: 64px; }
+                .sequencer { margin-top: 8px; }
+                .steps { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; }
                 audio { 
                     display: none;
                 }
@@ -525,6 +615,36 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 </div>
                 <canvas id="viz"></canvas>
                 <canvas id="effectsCanvas"></canvas>
+                <div class="pad-section" id="padSection">
+                    <div class="pad-header">
+                        <span class="pad-title">打击垫（4×4，16步循环）</span>
+                        <div class="pad-controls">
+                            <div class="transport">
+                                <button class="toggle" id="seqToggle">开始</button>
+                                <button id="seqClear">清空</button>
+                            </div>
+                            <div class="tempo">
+                                <label for="tempo">速度</label>
+                                <input id="tempo" type="range" min="60" max="180" value="120" />
+                                <span id="tempoVal">120 BPM</span>
+                            </div>
+                            <div class="tempo">
+                                <label for="padVol">音量</label>
+                                <input id="padVol" type="range" min="0" max="150" value="90" />
+                                <span id="padVolVal">90%</span>
+                            </div>
+                            <div class="tempo">
+                                <span>Step: <span id="stepIndex">-</span></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid-wrapper">
+                        <div class="pads-grid" id="padsGrid"></div>
+                        <div class="sequencer">
+                            <div class="steps" id="steps"></div>
+                        </div>
+                    </div>
+                </div>
                 <audio id="audio" crossorigin="anonymous"></audio>
             </div>
             <script>
@@ -536,6 +656,16 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 const ctx = canvas.getContext('2d');
                 const effectsCanvas = document.getElementById('effectsCanvas');
                 const effectsCtx = effectsCanvas.getContext('2d');
+                // Drum pad elements
+                const padsGrid = document.getElementById('padsGrid');
+                const stepsDiv = document.getElementById('steps');
+                const stepIndexEl = document.getElementById('stepIndex');
+                const seqToggle = document.getElementById('seqToggle');
+                const seqClear = document.getElementById('seqClear');
+                const tempoInput = document.getElementById('tempo');
+                const tempoVal = document.getElementById('tempoVal');
+                const padVol = document.getElementById('padVol');
+                const padVolVal = document.getElementById('padVolVal');
                 
                 // Set canvas size
                 function resizeCanvas() {
@@ -561,6 +691,8 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
                 let started = false;
                 let ac, analyser, src;
+                let padMaster;
+                let padGain = 0.9;
                 
                 // Keyboard Effects System
                 let effects = [];
@@ -1033,6 +1165,9 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     if(ac) return;
                     ac = new (window.AudioContext || window.webkitAudioContext)();
                     analyser = ac.createAnalyser();
+                    padMaster = ac.createGain();
+                    padMaster.gain.value = padGain;
+                    padMaster.connect(ac.destination);
                     analyser.fftSize = 256;
                     const bufferLength = analyser.frequencyBinCount;
                     const dataArray = new Uint8Array(bufferLength);
@@ -1110,6 +1245,396 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     vscode.postMessage({ command: 'audioEnded' });
                     toggle.textContent = '播放';
                 });
+
+                // ==== Drum pad (4x4) & 16-step sequencer ====
+                const PAD_ROWS = 4, PAD_COLS = 4;
+                const PADS = PAD_ROWS * PAD_COLS;
+                const STEPS = 16;
+                const patterns = Array.from({ length: PADS }, () => Array(STEPS).fill(false));
+                const padEls = [];
+
+                // Build pad UI
+                function initPads() {
+                    padsGrid.innerHTML = '';
+                    for (let i = 0; i < PADS; i++) {
+                        const el = document.createElement('div');
+                        el.className = 'pad';
+                        el.dataset.idx = String(i);
+                        el.innerHTML = '<div class="label">PAD ' + (i + 1) + '</div><div class="light"></div>';
+                        padsGrid.appendChild(el);
+                        padEls.push(el);
+                    }
+                }
+                initPads();
+
+                // Build steps UI
+                function initSteps() {
+                    stepsDiv.innerHTML = '';
+                    for (let s = 0; s < STEPS; s++) {
+                        const st = document.createElement('div');
+                        st.className = 'step';
+                        st.dataset.step = String(s);
+                        st.textContent = String(s + 1);
+                        stepsDiv.appendChild(st);
+                    }
+                }
+                initSteps();
+
+                // Immediate play mapping
+                // Ethereal chords for last column (add9/maj7 flavors)
+                const ETHEREAL_CHORDS = [
+                    [261.63, 329.63, 392.00, 587.33],  // Cadd9: C4 E4 G4 D5
+                    [220.00, 261.63, 329.63, 493.88],  // Am9:  A3 C4 E4 B4
+                    [174.61, 220.00, 261.63, 329.63],  // Fmaj7: F3 A3 C4 E4
+                    [196.00, 246.94, 293.66, 392.00]   // Gsus2(add6): G3 B3 D4 G4
+                ];
+
+                // Row-wise pitch sets for columns 0..2 (distinct timbres + pitch)
+                const ROW_FREQS = [
+                    [55.00, 73.42, 98.00],   // Row 0: bass boom
+                    [110.00, 147.00, 196.00],// Row 1: toms
+                    [220.00, 293.66, 392.00],// Row 2: plucks
+                    [440.00, 587.33, 784.00] // Row 3: bells
+                ];
+
+                function playEtherealChord(time, freqs) {
+                    // soft airy pad: detuned saws through LP, with light stereo echoes and noise air
+                    const lp = ac.createBiquadFilter();
+                    lp.type = 'lowpass';
+                    lp.frequency.setValueAtTime(1800, time);
+                    const g = envAD(lp, time, 0.02, 0.9, 0.35, 0.0001);
+                    lp.connect(padMaster);
+
+                    for (let i = 0; i < freqs.length; i++) {
+                        const oscA = ac.createOscillator();
+                        const oscB = ac.createOscillator();
+                        oscA.type = 'sawtooth';
+                        oscB.type = 'sawtooth';
+                        oscA.frequency.setValueAtTime(freqs[i], time);
+                        oscB.frequency.setValueAtTime(freqs[i], time);
+                        oscA.detune.setValueAtTime(-6, time);
+                        oscB.detune.setValueAtTime(6, time);
+                        oscA.connect(g); oscB.connect(g);
+                        oscA.start(time); oscB.start(time);
+                        oscA.stop(time + 0.8); oscB.stop(time + 0.8);
+                    }
+
+                    // Add airy noise layer
+                    const noise = ac.createBufferSource();
+                    const nb = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+                    const nd = nb.getChannelData(0);
+                    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+                    noise.buffer = nb;
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3000;
+                    const gAir = envAD(padMaster, time + 0.01, 0.02, 0.6, 0.12, 0.0001);
+                    noise.connect(hp).connect(gAir);
+                    noise.start(time); noise.stop(time + 0.4);
+
+                    // Subtle stereo echoes (no feedback)
+                    const dL = ac.createDelay(1.0); dL.delayTime.setValueAtTime(0.22, time);
+                    const dR = ac.createDelay(1.0); dR.delayTime.setValueAtTime(0.31, time);
+                    const gL = ac.createGain(); gL.gain.value = 0.12;
+                    const gR = ac.createGain(); gR.gain.value = 0.12;
+                    const panL = ac.createStereoPanner(); panL.pan.value = -0.6;
+                    const panR = ac.createStereoPanner(); panR.pan.value = 0.6;
+                    g.connect(dL).connect(gL).connect(panL).connect(padMaster);
+                    g.connect(dR).connect(gR).connect(panR).connect(padMaster);
+                }
+
+                function triggerPad(padIdx, time) {
+                    const row = Math.floor(padIdx / PAD_COLS);
+                    const col = padIdx % PAD_COLS;
+                    if (col === PAD_COLS - 1) {
+                        const chord = ETHEREAL_CHORDS[row] || ETHEREAL_CHORDS[0];
+                        playEtherealChord(time, chord);
+                        return;
+                    }
+                    // Row-specific mapping: row 1 (second row) columns 0..2 are cymbal/drum voices
+                    if (row === 1) {
+                        if (col === 0) { playCrash(time); return; }
+                        if (col === 1) { playOpenHat(time); return; }
+                        if (col === 2) { playRide(time); return; }
+                    }
+                    const freq = (ROW_FREQS[row] && ROW_FREQS[row][col]) ? ROW_FREQS[row][col] : 220;
+                    if (row === 0) { const boost = col < 3 ? 1.15 : 1.0; playBassBoom(time, freq, boost); }
+                    else if (row === 1) playTom(time, freq); // fallback for other columns if any
+                    else if (row === 2) playPluck(time, freq);
+                    else { const boost = col < 3 ? 1.15 : 1.0; playBellTone(time, freq, boost); }
+                }
+
+                // Pad interactions
+                padEls.forEach((el, idx) => {
+                    el.addEventListener('click', () => {
+                        ensureAudioContext();
+                        triggerPad(idx, ac.currentTime + 0.001);
+                        // Flash
+                        el.classList.add('hit');
+                        el.classList.add('active');
+                        setTimeout(() => { el.classList.remove('hit'); }, 180);
+                        setTimeout(() => { el.classList.remove('active'); }, 420);
+                        // Toggle current step if playing else toggle step 0
+                        const s = isRunning ? currentStep : 0;
+                        patterns[idx][s] = !patterns[idx][s];
+                        renderPatternUI();
+                    });
+                });
+
+                // Steps click toggles all pads at that step
+                stepsDiv.addEventListener('click', (ev) => {
+                    const st = ev.target.closest('.step');
+                    if (!st) return;
+                    const s = Number(st.dataset.step);
+                    for (let i = 0; i < PADS; i++) patterns[i][s] = !patterns[i][s];
+                    renderPatternUI();
+                });
+
+                // Sequencer core
+                let currentStep = 0;
+                let isRunning = false;
+                let nextNoteTime = 0; // in ac time
+                let scheduleTimer = null;
+
+                function getStepIntervalSec() {
+                    const bpm = Number(tempoInput.value) || 120;
+                    return (60 / bpm) / 4; // 1/16 note
+                }
+                function scheduler() {
+                    const lookahead = 0.1; // seconds
+                    while (nextNoteTime < ac.currentTime + lookahead) {
+                        scheduleStep(currentStep, nextNoteTime);
+                        const stepDur = getStepIntervalSec();
+                        nextNoteTime += stepDur;
+                        currentStep = (currentStep + 1) % STEPS;
+                    }
+                }
+                function scheduleStep(stepIndex, time) {
+                    // Trigger pads with active pattern at this step
+                    for (let i = 0; i < PADS; i++) if (patterns[i][stepIndex]) triggerPad(i, time);
+                    // Visuals
+                    requestAnimationFrame(() => {
+                        stepIndexEl.textContent = String(stepIndex + 1);
+                        const stepNodes = stepsDiv.querySelectorAll('.step');
+                        stepNodes.forEach((n, idx) => n.classList.toggle('playing', idx === stepIndex));
+                        // Pulse active pads
+                        padEls.forEach((padEl, i) => {
+                            if (patterns[i][stepIndex]) {
+                                padEl.classList.add('hit');
+                                padEl.classList.add('active');
+                                setTimeout(() => { padEl.classList.remove('hit'); padEl.classList.remove('active'); }, 200);
+                            }
+                        });
+                    });
+                }
+                function startSequencer() {
+                    ensureAudioContext();
+                    if (isRunning) return;
+                    isRunning = true;
+                    seqToggle.textContent = '停止';
+                    currentStep = 0;
+                    nextNoteTime = ac.currentTime + 0.05;
+                    scheduleTimer = setInterval(scheduler, 25);
+                }
+                function stopSequencer() {
+                    if (!isRunning) return;
+                    isRunning = false;
+                    seqToggle.textContent = '开始';
+                    if (scheduleTimer) { clearInterval(scheduleTimer); scheduleTimer = null; }
+                    stepsDiv.querySelectorAll('.step.playing').forEach(n => n.classList.remove('playing'));
+                    stepIndexEl.textContent = '-';
+                }
+                seqToggle.addEventListener('click', () => { if (!isRunning) startSequencer(); else stopSequencer(); });
+                seqClear.addEventListener('click', () => {
+                    for (let i = 0; i < PADS; i++) patterns[i].fill(false);
+                    renderPatternUI();
+                });
+                tempoInput.addEventListener('input', () => { tempoVal.textContent = tempoInput.value + ' BPM'; });
+                if (padVol) {
+                    const updatePadVolLabel = () => { if (padVolVal) padVolVal.textContent = padVol.value + '%'; };
+                    updatePadVolLabel();
+                    padVol.addEventListener('input', () => {
+                        const v = Math.max(0, Math.min(150, parseInt(padVol.value || '90')));
+                        padGain = v / 100;
+                        if (padMaster) padMaster.gain.value = padGain;
+                        updatePadVolLabel();
+                    });
+                }
+
+                function renderPatternUI() {
+                    // Pad active state if any step true
+                    padEls.forEach((el, idx) => {
+                        const any = patterns[idx].some(v => v);
+                        el.classList.toggle('active', any);
+                    });
+                    // Steps opacity proportional to number of active pads
+                    const stepNodes = stepsDiv.querySelectorAll('.step');
+                    for (let s = 0; s < STEPS; s++) {
+                        let count = 0; for (let i = 0; i < PADS; i++) if (patterns[i][s]) count++;
+                        const node = stepNodes[s];
+                        if (node) node.style.opacity = String(0.25 + Math.min(1, count / 8));
+                    }
+                }
+                renderPatternUI();
+
+                // ---- Simple percussive synths ----
+                function envAD(dest, t0, attack, decay, peak=0.9, sustain=0.0001) {
+                    const g = ac.createGain();
+                    g.gain.setValueAtTime(0.0001, t0);
+                    g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t0 + attack);
+                    g.gain.exponentialRampToValueAtTime(Math.max(sustain, 0.0001), t0 + attack + decay);
+                    g.connect(dest);
+                    return g;
+                }
+                // Row-specific pitched instruments
+                function playBassBoom(time, freq, levelMul = 1.0) {
+                    const osc = ac.createOscillator();
+                    const g = envAD(padMaster, time, 0.002, 0.22, 0.8 * levelMul, 0.0001);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq * 2, time);
+                    osc.frequency.exponentialRampToValueAtTime(freq, time + 0.18);
+                    osc.connect(g);
+                    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 800;
+                    g.disconnect(); g.connect(lp).connect(padMaster);
+                    osc.start(time); osc.stop(time + 0.25);
+                }
+                function playTom(time, freq) {
+                    const osc = ac.createOscillator();
+                    const g = envAD(padMaster, time, 0.003, 0.18, 0.8, 0.0001);
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq * 1.6, time);
+                    osc.frequency.exponentialRampToValueAtTime(freq, time + 0.16);
+                    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq * 2; bp.Q.value = 6;
+                    osc.connect(bp).connect(g);
+                    osc.start(time); osc.stop(time + 0.22);
+                }
+                function playPluck(time, freq) {
+                    const osc = ac.createOscillator();
+                    const g = envAD(padMaster, time, 0.002, 0.12, 0.7, 0.0001);
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(freq, time);
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 400;
+                    osc.connect(hp).connect(g);
+                    osc.start(time); osc.stop(time + 0.15);
+                }
+                function playBellTone(time, freq, levelMul = 1.0) {
+                    const osc1 = ac.createOscillator();
+                    const osc2 = ac.createOscillator();
+                    const g = envAD(padMaster, time, 0.002, 0.6, 0.65 * levelMul, 0.0001);
+                    osc1.type = 'sine'; osc2.type = 'sine';
+                    osc1.frequency.setValueAtTime(freq, time);
+                    osc2.frequency.setValueAtTime(freq * 2.99, time); // inharmonic partial
+                    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq * 2; bp.Q.value = 10;
+                    osc1.connect(bp).connect(g); osc2.connect(bp);
+                    const d = ac.createDelay(1.0); d.delayTime.value = 0.18; const gd = ac.createGain(); gd.gain.value = 0.12;
+                    g.connect(d).connect(gd).connect(padMaster);
+                    osc1.start(time); osc2.start(time);
+                    osc1.stop(time + 0.7); osc2.stop(time + 0.7);
+                }
+                function playKick(time) {
+                    const osc = ac.createOscillator();
+                    const gain = envAD(padMaster, time, 0.002, 0.2, 1.05, 0.0001);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(140, time);
+                    osc.frequency.exponentialRampToValueAtTime(40, time + 0.18);
+                    osc.connect(gain);
+                    osc.start(time);
+                    osc.stop(time + 0.22);
+                }
+                function playSnare(time) {
+                    const noise = ac.createBufferSource();
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.2, ac.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < data.length; i++) { data[i] = (Math.random() * 2 - 1) * (1 - i / data.length); }
+                    noise.buffer = buffer;
+                    const g = envAD(padMaster, time, 0.001, 0.14, 0.95, 0.0001);
+                    const bp = ac.createBiquadFilter();
+                    bp.type = 'bandpass';
+                    bp.frequency.value = 1800;
+                    noise.connect(bp).connect(g);
+                    noise.start(time);
+                    noise.stop(time + 0.2);
+                }
+                function playHat(time) {
+                    const noise = ac.createBufferSource();
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < data.length; i++) { data[i] = Math.random() * 2 - 1; }
+                    noise.buffer = buffer;
+                    const hp = ac.createBiquadFilter();
+                    hp.type = 'highpass';
+                    hp.frequency.value = 8000;
+                    const g = envAD(padMaster, time, 0.001, 0.07, 0.7, 0.0001);
+                    noise.connect(hp).connect(g);
+                    noise.start(time);
+                    noise.stop(time + 0.05);
+                }
+                function playOpenHat(time) {
+                    const noise = ac.createBufferSource();
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.35, ac.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < data.length; i++) { data[i] = Math.random() * 2 - 1; }
+                    noise.buffer = buffer;
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6000;
+                    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 9000; bp.Q.value = 0.7;
+                    const g = envAD(padMaster, time, 0.001, 0.28, 0.6, 0.0001);
+                    noise.connect(hp).connect(bp).connect(g);
+                    noise.start(time);
+                    noise.stop(time + 0.35);
+                }
+                function playCrash(time) {
+                    const noise = ac.createBufferSource();
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.9, ac.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < data.length; i++) { data[i] = (Math.random() * 2 - 1) * (1 - i / data.length); }
+                    noise.buffer = buffer;
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 4000;
+                    const g = envAD(padMaster, time, 0.002, 0.7, 0.6, 0.0001);
+                    noise.connect(hp).connect(g);
+                    // light stereo spread
+                    const d = ac.createDelay(1.0); d.delayTime.value = 0.02; const gd = ac.createGain(); gd.gain.value = 0.12; const p = ac.createStereoPanner(); p.pan.value = 0.4;
+                    g.connect(d).connect(gd).connect(p).connect(padMaster);
+                    noise.start(time);
+                    noise.stop(time + 0.9);
+                }
+                function playRide(time) {
+                    // combine metallic partials + short noise burst
+                    const g = envAD(padMaster, time, 0.002, 0.5, 0.55, 0.0001);
+                    const freqs = [6000, 8000, 10000, 12000];
+                    freqs.forEach((f, idx) => {
+                        const osc = ac.createOscillator(); osc.type = 'square'; osc.frequency.value = f;
+                        const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = 12;
+                        osc.connect(bp).connect(g);
+                        osc.start(time); osc.stop(time + 0.4 + idx * 0.02);
+                    });
+                    const noise = ac.createBufferSource();
+                    const buffer = ac.createBuffer(1, ac.sampleRate * 0.08, ac.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < data.length; i++) { data[i] = Math.random() * 2 - 1; }
+                    noise.buffer = buffer;
+                    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 9000;
+                    const g2 = envAD(padMaster, time, 0.002, 0.08, 0.3, 0.0001);
+                    noise.connect(hp).connect(g2);
+                    noise.start(time);
+                    noise.stop(time + 0.08);
+                }
+                function playClap(time) {
+                    const makeBurst = (offset) => {
+                        const noise = ac.createBufferSource();
+                        const buffer = ac.createBuffer(1, ac.sampleRate * 0.06, ac.sampleRate);
+                        const data = buffer.getChannelData(0);
+                        for (let i = 0; i < data.length; i++) { data[i] = (Math.random() * 2 - 1) * (1 - i / data.length); }
+                        noise.buffer = buffer;
+                        const hp = ac.createBiquadFilter();
+                        hp.type = 'highpass';
+                        hp.frequency.value = 1200;
+                        const g = envAD(padMaster, time + offset, 0.005, 0.1, 0.85, 0.0001);
+                        noise.connect(hp).connect(g);
+                        noise.start(time + offset);
+                        noise.stop(time + offset + 0.06);
+                    };
+                    makeBurst(0);
+                    makeBurst(0.015);
+                    makeBurst(0.03);
+                }
                 
                 // Add click event to test effect creation
                 effectsCanvas.addEventListener('click', (e) => {
