@@ -1141,27 +1141,6 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     effects = [];
                 }
                 
-                // Add clear button
-                const clearButton = document.createElement('button');
-                clearButton.textContent = '清除动效';
-                clearButton.style.fontSize = '10px';
-                clearButton.style.padding = '2px 6px';
-                clearButton.style.marginLeft = '8px';
-                clearButton.addEventListener('click', clearAllEffects);
-                document.querySelector('.row').appendChild(clearButton);
-                
-                // Add test button
-                const testButton = document.createElement('button');
-                testButton.textContent = '测试动效';
-                testButton.style.fontSize = '10px';
-                testButton.style.padding = '2px 6px';
-                testButton.style.marginLeft = '8px';
-                testButton.addEventListener('click', () => {
-                    console.log('Test button clicked');
-                    createEffect('a');
-                });
-                document.querySelector('.row').appendChild(testButton);
-
                 function ensureAudioContext() {
                     if(ac) return;
                     ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -1383,11 +1362,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     el.addEventListener('click', () => {
                         ensureAudioContext();
                         triggerPad(idx, ac.currentTime + 0.001);
-                        // Flash
+                        // Flash: retrigger CSS animation reliably
+                        el.classList.remove('hit');
+                        void el.offsetWidth;
                         el.classList.add('hit');
-                        el.classList.add('active');
-                        setTimeout(() => { el.classList.remove('hit'); }, 180);
-                        setTimeout(() => { el.classList.remove('active'); }, 420);
                         // Toggle current step if playing else toggle step 0
                         const s = isRunning ? currentStep : 0;
                         patterns[idx][s] = !patterns[idx][s];
@@ -1431,12 +1409,15 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         stepIndexEl.textContent = String(stepIndex + 1);
                         const stepNodes = stepsDiv.querySelectorAll('.step');
                         stepNodes.forEach((n, idx) => n.classList.toggle('playing', idx === stepIndex));
-                        // Pulse active pads
+                        // Pulse active pads (retrigger animation even at high BPM)
                         padEls.forEach((padEl, i) => {
                             if (patterns[i][stepIndex]) {
+                                // remove then re-add to restart CSS transition
+                                padEl.classList.remove('hit');
+                                void padEl.offsetWidth; // force reflow
                                 padEl.classList.add('hit');
-                                padEl.classList.add('active');
-                                setTimeout(() => { padEl.classList.remove('hit'); padEl.classList.remove('active'); }, 200);
+                                // do not toggle 'active' here; renderPatternUI manages it
+                                setTimeout(() => { padEl.classList.remove('hit'); }, 100);
                             }
                         });
                     });
