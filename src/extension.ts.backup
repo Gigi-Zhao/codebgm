@@ -1,0 +1,1591 @@
+import * as vscode from 'vscode';
+import * as path from 'path';
+
+class MusicPlayerPanel {
+    private static readonly viewType = 'codebgmPlayer';
+    public static currentPanel: MusicPlayerPanel | undefined;
+    private readonly _panel: vscode.WebviewPanel;
+    private readonly _extensionUri: vscode.Uri;
+    private _disposables: vscode.Disposable[] = [];
+    private _keystrokes: number[] = [];
+    private _currentMode: string = 'deep_focus';
+    private _lastSwitchTime: number = Date.now();
+    private _minDuration: number = 5000; // 最短持续时间（毫秒）
+    private _currentAudio: string | undefined;
+    private _playlists: { [key: string]: string[] } = {
+        'deep_focus': [
+            'Since TMRW 始于明天 - 从忧伤到忧伤.mp3',
+            'Since TMRW 始于明天 - Love You.mp3'
+        ],
+        'energy': [
+            'Since TMRW 始于明天 - 自己骗自己.mp3'
+        ],
+        'creative': [
+            'Since TMRW 始于明天 - 幻象.mp3'
+        ]
+    };
+
+    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+        this._panel = panel;
+        this._extensionUri = extensionUri;
+
+        this._setUpWebview();
+        this._setupKeyboardListener();
+
+        this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+        this._panel.webview.onDidReceiveMessage(this._handleMessage, this, this._disposables);
+        
+        // 设置初始音乐，但不自动播放
+        this._panel.webview.postMessage({ 
+            command: 'init',
+            track: this._getMediaUri(this._playlists[this._currentMode][0]),
+            mode: this._getModeDisplayName(this._currentMode)
+        });
+    }
+
+    private _getMediaUri(filename: string): string {
+        const uri = vscode.Uri.joinPath(this._extensionUri, 'media', filename);
+        return this._panel.webview.asWebviewUri(uri).toString();
+    }
+
+    private _playRandomTrack(mode: string) {
+        const tracks = this._playlists[mode];
+        if (!tracks || tracks.length === 0) {
+            return;
+        }
+
+        const track = tracks[Math.floor(Math.random() * tracks.length)];
+        this._currentAudio = track;
+
+        this._panel.webview.postMessage({
+            command: 'playAudio',
+            track: this._getMediaUri(track).toString(),
+            mode: this._getModeDisplayName(mode)
+        });
+    }
+
+    private _handleMessage(message: any) {
+        switch (message.command) {
+            case 'audioEnded':
+                this._playRandomTrack(this._currentMode);
+                break;
+        }
+    }
+
+    private _setUpWebview() {
+        const webview = this._panel.webview;
+        this._panel.webview.html = this._getWebviewContent(webview);
+    }
+
+    public static createOrShow(extensionContext: vscode.ExtensionContext) {
+        const column = vscode.window.activeTextEditor
+            ? vscode.window.activeTextEditor.viewColumn
+            : undefined;
+
+        if (MusicPlayerPanel.currentPanel) {
+            MusicPlayerPanel.currentPanel._panel.reveal(column);
+            return;
+        }
+
+        const panel = vscode.window.createWebviewPanel(
+            MusicPlayerPanel.viewType,
+            'CodeBGM Player',
+            { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [
+                    vscode.Uri.file(path.join(extensionContext.extensionPath, 'media'))
+                ]
+            }
+        );
+
+        MusicPlayerPanel.currentPanel = new MusicPlayerPanel(panel, extensionContext.extensionUri);
+    }
+
+    private _setupKeyboardListener() {
+        let disposable = vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.contentChanges.length > 0) {
+                this._keystrokes.push(Date.now());
+                if (this._keystrokes.length > 20) {
+                    this._keystrokes.shift();
+                }
+                this._analyzeTypingPattern();
+            }
+        });
+        this._disposables.push(disposable);
+    }
+
+    private _analyzeTypingPattern() {
+        if (this._keystrokes.length < 2) {
+            return;
+        }
+
+        let intervals: number[] = [];
+        for (let i = 1; i < this._keystrokes.length; i++) {
+            intervals.push(this._keystrokes[i] - this._keystrokes[i - 1]);
+        }
+
+        let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+
+        let now = Date.now();
+        if (now - this._lastSwitchTime < this._minDuration) {
+            return;
+        }
+
+        let newMode = 'deep_focus';
+        if (avg < 200) {
+            newMode = 'energy';
+        } else if (variance > 50000) {
+            newMode = 'creative';
+        }
+
+        if (newMode !== this._currentMode) {
+            this._currentMode = newMode;
+            this._lastSwitchTime = now;
+            this._playRandomTrack(newMode);
+        }
+    }
+
+    private _getModeDisplayName(mode: string): string {
+        const modeNames: {[key: string]: string} = {
+            'deep_focus': '深度专注',
+            'energy': '能量激发',
+            'creative': '创意发散'
+        };
+        return modeNames[mode] || mode;
+    }
+
+    private _getWebviewContent(webview: vscode.Webview): string {
+        return `<!DOCTYPE html>
+        <html lang="zh">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src ${webview.cspSource} https: http:; script-src 'unsafe-inline' ${webview.cspSource}; style-src 'unsafe-inline';">
+            <title>CodeBGM Player</title>
+            <style>
+                body { 
+                    font-family: var(--vscode-font-family);
+                    text-align: center; 
+                    padding: 40px;
+                    color: var(--vscode-foreground);
+                    background-color: var(--vscode-editor-background);
+                }
+                .status {
+                    margin: 20px 0;
+                    padding: 10px;
+                    border-radius: 4px;
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                }
+                .player-controls {
+                    margin-top: 20px;
+                }
+                audio {
+                    width: 80%;
+                    max-width: 500px;
+                }
+            </style>
+        </head>
+        <body>
+            <h2>CodeBGM Player</h2>
+            <div class="status">
+                当前模式：<span id="mode">深度专注</span>
+            </div>
+            <div class="player-controls">
+                <audio id="audio" controls></audio>
+                <div id="nowPlaying"></div>
+            </div>
+            <script>
+                const vscode = acquireVsCodeApi();
+                const audio = document.getElementById('audio');
+                let isFirstPlay = true;
+                let currentState = vscode.getState() || {};
+                
+                // 添加播放按钮
+                const playButton = document.createElement('button');
+                playButton.textContent = '点击开始播放';
+                playButton.style.margin = '10px';
+                playButton.style.padding = '8px 16px';
+                playButton.style.backgroundColor = 'var(--vscode-button-background)';
+                playButton.style.color = 'var(--vscode-button-foreground)';
+                playButton.style.border = 'none';
+                playButton.style.borderRadius = '4px';
+                playButton.style.cursor = 'pointer';
+                document.querySelector('.player-controls').insertBefore(playButton, audio);
+
+                // 处理播放按钮点击
+                playButton.addEventListener('click', () => {
+                    if (isFirstPlay) {
+                        isFirstPlay = false;
+                        playButton.style.display = 'none';
+                        audio.style.display = 'block';
+                    }
+                    audio.play().catch(console.error);
+                });
+
+                window.addEventListener('message', event => {
+                    const message = event.data;
+                    switch (message.command) {
+                        case 'init':
+                        case 'playAudio':
+                            document.getElementById('mode').textContent = message.mode;
+                            currentState = {
+                                track: message.track,
+                                mode: message.mode,
+                                wasPlaying: currentState.wasPlaying
+                            };
+                            vscode.setState(currentState);
+                            
+                            const wasPlaying = !audio.paused;
+                            audio.src = message.track;
+                            if (!isFirstPlay && (wasPlaying || message.command === 'playAudio')) {
+                                audio.play().catch(console.error);
+                            }
+                            break;
+                        case 'keyPressed':
+                            console.log('Received keyPressed message:', message.key);
+                            createEffect(message.key);
+                            break;
+                    }
+                });
+
+                // 初始隐藏音频控件
+                audio.style.display = 'none';
+
+                // 恢复之前的播放状态
+                if (currentState.track) {
+                    audio.src = currentState.track;
+                    document.getElementById('mode').textContent = currentState.mode;
+                }
+
+                audio.addEventListener('ended', () => {
+                    vscode.postMessage({ command: 'audioEnded' });
+                });
+
+                // 处理页面可见性变化
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) {
+                        if (!audio.paused) {
+                            currentState.wasPlaying = true;
+                            currentState.currentTime = audio.currentTime;
+                            vscode.setState(currentState);
+                        }
+                    } else {
+                        if (currentState.wasPlaying && !isFirstPlay) {
+                            audio.currentTime = currentState.currentTime || 0;
+                            audio.play().catch(console.error);
+                        }
+                    }
+                });
+
+                // 保持播放状态
+                setInterval(() => {
+                    if (!audio.paused && audio.currentTime > 0) {
+                        currentState.wasPlaying = true;
+                        currentState.currentTime = audio.currentTime;
+                        vscode.setState(currentState);
+                    }
+                }, 1000);
+            </script>
+        </body>
+        </html>`;
+    }
+
+    public dispose() {
+        MusicPlayerPanel.currentPanel = undefined;
+        this._panel.dispose();
+
+        while (this._disposables.length) {
+            const x = this._disposables.pop();
+            if (x) {
+                x.dispose();
+            }
+        }
+    }
+}
+
+class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
+    public static readonly viewId = 'codebgm.view';
+    private _view: vscode.WebviewView | undefined;
+    private _keystrokes: number[] = [];
+    private _lastSwitchTime: number = Date.now();
+    private _minDuration: number = 5000;
+    private _currentMode: string = 'deep_focus';
+    private _isManuallyPaused: boolean = false;
+    private _playlists: { [key: string]: string[] } = {
+        'deep_focus': [
+            'Since TMRW 始于明天 - 从忧伤到忧伤.mp3',
+            'Since TMRW 始于明天 - Love You.mp3'
+        ],
+        'energy': [
+            'Since TMRW 始于明天 - 自己骗自己.mp3'
+        ],
+        'creative': [
+            'Since TMRW 始于明天 - 幻象.mp3'
+        ]
+    };
+
+    constructor(private readonly context: vscode.ExtensionContext) {}
+
+    public resolveWebviewView(webviewView: vscode.WebviewView): void | Promise<void> {
+        this._view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.file(path.join(this.context.extensionPath, 'media'))]
+        };
+        webviewView.webview.onDidReceiveMessage(this._handleMessage, this);
+        this._setupKeyboardListener();
+        webviewView.webview.html = this._getHtml(webviewView.webview);
+        // 初始设置但不自动播放
+        this._postInit(this._playlists[this._currentMode][0]);
+    }
+
+    private _postInit(filename: string) {
+        if (!this._view) { return; }
+        this._view.webview.postMessage({
+            command: 'init',
+            track: this._getMediaUri(filename),
+            mode: this._getModeDisplayName(this._currentMode)
+        });
+    }
+
+    private _getMediaUri(filename: string): string {
+        if (!this._view) { return ''; }
+        const uri = vscode.Uri.joinPath(this.context.extensionUri, 'media', filename);
+        return this._view.webview.asWebviewUri(uri).toString();
+    }
+
+    private _handleMessage(message: any) {
+        switch (message.command) {
+            case 'audioEnded':
+                // Only auto-play next track if not manually paused
+                if (!this._isManuallyPaused) {
+                    this._playRandomTrack(this._currentMode);
+                }
+                break;
+            case 'audioPaused':
+                this._isManuallyPaused = true;
+                break;
+            case 'audioResumed':
+                this._isManuallyPaused = false;
+                break;
+        }
+    }
+
+    private _setupKeyboardListener() {
+        let disposable = vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.contentChanges.length > 0) {
+                this._keystrokes.push(Date.now());
+                if (this._keystrokes.length > 20) {
+                    this._keystrokes.shift();
+                }
+                this._analyzeTypingPattern();
+                
+                // Send keystroke info to webview for effects
+                if (this._view) {
+                    const lastChange = e.contentChanges[e.contentChanges.length - 1];
+                    if (lastChange && lastChange.text) {
+                        // Extract the last character typed
+                        const lastChar = lastChange.text[lastChange.text.length - 1];
+                        if (lastChar && lastChar.match(/[a-z]/i)) {
+                            this._view.webview.postMessage({
+                                command: 'keyPressed',
+                                key: lastChar.toLowerCase()
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        this.context.subscriptions.push(disposable);
+    }
+
+    private _analyzeTypingPattern() {
+        if (this._keystrokes.length < 2) { return; }
+        let intervals: number[] = [];
+        for (let i = 1; i < this._keystrokes.length; i++) {
+            intervals.push(this._keystrokes[i] - this._keystrokes[i - 1]);
+        }
+        let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+        let now = Date.now();
+        if (now - this._lastSwitchTime < this._minDuration) { return; }
+
+        let newMode = 'deep_focus';
+        if (avg < 200) { newMode = 'energy'; }
+        else if (variance > 50000) { newMode = 'creative'; }
+
+        if (newMode !== this._currentMode) {
+            this._currentMode = newMode;
+            this._lastSwitchTime = now;
+            // Only auto-play if not manually paused
+            if (!this._isManuallyPaused) {
+                this._playRandomTrack(newMode);
+            }
+        }
+    }
+
+    private _playRandomTrack(mode: string) {
+        if (!this._view) { return; }
+        const tracks = this._playlists[mode] || [];
+        if (tracks.length === 0) { return; }
+        const track = tracks[Math.floor(Math.random() * tracks.length)];
+        this._view.webview.postMessage({
+            command: 'playAudio',
+            track: this._getMediaUri(track),
+            mode: this._getModeDisplayName(mode)
+        });
+    }
+
+    private _getModeDisplayName(mode: string): string {
+        const modeNames: { [key: string]: string } = {
+            'deep_focus': '深度专注',
+            'energy': '能量激发',
+            'creative': '创意发散'
+        };
+        return modeNames[mode] || mode;
+    }
+
+    private _getHtml(webview: vscode.Webview): string {
+        return `<!DOCTYPE html>
+        <html lang="zh">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource}; style-src 'unsafe-inline';">
+            <title>CODEBGM</title>
+            <style>
+                body {
+                    font-family: var(--vscode-font-family);
+                    color: var(--vscode-foreground);
+                    background: var(--vscode-editor-background);
+                    margin: 0;
+                    padding: 8px;
+                }
+                .container {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+                .row { 
+                    display: flex; 
+                    align-items: center; 
+                    gap: 8px;
+                    margin-bottom: 8px;
+                }
+                .status { 
+                    font-size: 12px;
+                    opacity: 0.8;
+                }
+                button { 
+                    padding: 4px 10px;
+                    background: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                    border: none;
+                    border-radius: 2px;
+                    cursor: pointer;
+                }
+                button:hover {
+                    background: var(--vscode-button-hoverBackground);
+                }
+                canvas { 
+                    width: 100%;
+                    height: 100px;
+                    background: transparent;
+                    border-radius: 2px;
+                }
+                #effectsCanvas {
+                    width: 100%;
+                    height: 150px;
+                    background: transparent;
+                    border-radius: 2px;
+                    margin-top: 8px;
+                }
+                audio { 
+                    display: none;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="row">
+                    <button id="toggle">播放</button>
+                    <span class="status">模式：<span id="mode">深度专注</span></span>
+                </div>
+                <canvas id="viz"></canvas>
+                <canvas id="effectsCanvas"></canvas>
+                <audio id="audio" crossorigin="anonymous"></audio>
+            </div>
+            <script>
+                const vscode = acquireVsCodeApi();
+                const audio = document.getElementById('audio');
+                const toggle = document.getElementById('toggle');
+                const modeEl = document.getElementById('mode');
+                const canvas = document.getElementById('viz');
+                const ctx = canvas.getContext('2d');
+                const effectsCanvas = document.getElementById('effectsCanvas');
+                const effectsCtx = effectsCanvas.getContext('2d');
+                
+                // Set canvas size
+                function resizeCanvas() {
+                    const rect = canvas.getBoundingClientRect();
+                    canvas.width = rect.width * window.devicePixelRatio;
+                    canvas.height = rect.height * window.devicePixelRatio;
+                    
+                    const effectsRect = effectsCanvas.getBoundingClientRect();
+                    effectsCanvas.width = effectsRect.width * window.devicePixelRatio;
+                    effectsCanvas.height = effectsRect.height * window.devicePixelRatio;
+                    effectsCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                }
+                resizeCanvas();
+                window.addEventListener('resize', resizeCanvas);
+
+                let started = false;
+                let ac, analyser, src;
+                
+                // Keyboard Effects System
+                let effects = [];
+                let effectId = 0;
+                const MAX_EFFECTS = 20; // Limit number of effects for performance
+                
+                // Spectacular Fireworks Configuration
+                const effectTypes = {
+                    'a': { 
+                        type: 'classic-firework', 
+                        colors: ['#ff4757', '#ff6b7a', '#ff8a9b', '#ffa8b8'], 
+                        sound: 'low',
+                        pattern: 'circle',
+                        particles: 30,
+                        sparks: 15
+                    },
+                    'b': { 
+                        type: 'aqua-burst', 
+                        colors: ['#00d2d3', '#26d0ce', '#4dd0d1', '#74d0d2'], 
+                        sound: 'mid',
+                        pattern: 'spiral',
+                        particles: 35,
+                        sparks: 20
+                    },
+                    'c': { 
+                        type: 'blue-lightning', 
+                        colors: ['#3742fa', '#5352ed', '#706fd3', '#8d8cdb'], 
+                        sound: 'high',
+                        pattern: 'zigzag',
+                        particles: 25,
+                        sparks: 18
+                    },
+                    'd': { 
+                        type: 'emerald-explosion', 
+                        colors: ['#2ed573', '#5ee584', '#8ef595', '#b1f5a6'], 
+                        sound: 'low',
+                        pattern: 'diamond',
+                        particles: 28,
+                        sparks: 12
+                    },
+                    'e': { 
+                        type: 'golden-storm', 
+                        colors: ['#ffa502', '#ffb733', '#ffc964', '#ffdb95'], 
+                        sound: 'mid',
+                        pattern: 'star',
+                        particles: 40,
+                        sparks: 25
+                    },
+                    'f': { 
+                        type: 'purple-magic', 
+                        colors: ['#a55eea', '#b877ed', '#cb90f0', '#dca9f3'], 
+                        sound: 'high',
+                        pattern: 'flower',
+                        particles: 32,
+                        sparks: 20
+                    },
+                    'g': { 
+                        type: 'galaxy-burst', 
+                        colors: ['#2f3542', '#57606f', '#747d8c', '#a4b0be'], 
+                        sound: 'low',
+                        pattern: 'galaxy',
+                        particles: 45,
+                        sparks: 30
+                    },
+                    'h': { 
+                        type: 'rainbow-explosion', 
+                        colors: ['#ff3838', '#ff9f1a', '#ffeb3b', '#32ff7e', '#7bed9f', '#70a1ff', '#5352ed', '#ff3838'], 
+                        sound: 'mid',
+                        pattern: 'rainbow',
+                        particles: 50,
+                        sparks: 35
+                    },
+                    'i': { 
+                        type: 'ice-crystal', 
+                        colors: ['#74b9ff', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'crystal',
+                        particles: 22,
+                        sparks: 15
+                    },
+                    'j': { 
+                        type: 'jade-fire', 
+                        colors: ['#00b894', '#00cec9', '#6c5ce7', '#a29bfe'], 
+                        sound: 'low',
+                        pattern: 'jade',
+                        particles: 30,
+                        sparks: 18
+                    },
+                    'k': { 
+                        type: 'kaleidoscope', 
+                        colors: ['#ff7675', '#fd79a8', '#fdcb6e', '#e17055'], 
+                        sound: 'mid',
+                        pattern: 'kaleidoscope',
+                        particles: 38,
+                        sparks: 22
+                    },
+                    'l': { 
+                        type: 'lightning-storm', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#74b9ff'], 
+                        sound: 'high',
+                        pattern: 'lightning',
+                        particles: 28,
+                        sparks: 20
+                    },
+                    'm': { 
+                        type: 'magenta-dream', 
+                        colors: ['#e84393', '#fd79a8', '#fdcb6e', '#00b894'], 
+                        sound: 'low',
+                        pattern: 'heart',
+                        particles: 26,
+                        sparks: 16
+                    },
+                    'n': { 
+                        type: 'neon-explosion', 
+                        colors: ['#00d2d3', '#ff9ff3', '#feca57', '#ff6b6b'], 
+                        sound: 'mid',
+                        pattern: 'neon',
+                        particles: 35,
+                        sparks: 25
+                    },
+                    'o': { 
+                        type: 'orbital-burst', 
+                        colors: ['#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'orbital',
+                        particles: 42,
+                        sparks: 28
+                    },
+                    'p': { 
+                        type: 'plasma-fire', 
+                        colors: ['#ff7675', '#fd79a8', '#fdcb6e', '#00b894'], 
+                        sound: 'low',
+                        pattern: 'plasma',
+                        particles: 33,
+                        sparks: 20
+                    },
+                    'q': { 
+                        type: 'quantum-burst', 
+                        colors: ['#2d3436', '#636e72', '#74b9ff', '#a29bfe'], 
+                        sound: 'mid',
+                        pattern: 'quantum',
+                        particles: 48,
+                        sparks: 32
+                    },
+                    'r': { 
+                        type: 'royal-fireworks', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#74b9ff'], 
+                        sound: 'high',
+                        pattern: 'royal',
+                        particles: 36,
+                        sparks: 24
+                    },
+                    's': { 
+                        type: 'solar-flare', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'solar',
+                        particles: 40,
+                        sparks: 26
+                    },
+                    't': { 
+                        type: 'titanium-blast', 
+                        colors: ['#636e72', '#74b9ff', '#a29bfe', '#fd79a8'], 
+                        sound: 'mid',
+                        pattern: 'titanium',
+                        particles: 29,
+                        sparks: 18
+                    },
+                    'u': { 
+                        type: 'ultra-violet', 
+                        colors: ['#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'ultra',
+                        particles: 44,
+                        sparks: 30
+                    },
+                    'v': { 
+                        type: 'volcanic-eruption', 
+                        colors: ['#d63031', '#e17055', '#fdcb6e', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'volcano',
+                        particles: 37,
+                        sparks: 25
+                    },
+                    'w': { 
+                        type: 'white-lightning', 
+                        colors: ['#ffffff', '#f8f9fa', '#e9ecef', '#dee2e6'], 
+                        sound: 'mid',
+                        pattern: 'white',
+                        particles: 32,
+                        sparks: 22
+                    },
+                    'x': { 
+                        type: 'x-ray-burst', 
+                        colors: ['#2d3436', '#636e72', '#74b9ff', '#a29bfe'], 
+                        sound: 'high',
+                        pattern: 'xray',
+                        particles: 34,
+                        sparks: 20
+                    },
+                    'y': { 
+                        type: 'yellow-sunburst', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'sunburst',
+                        particles: 39,
+                        sparks: 27
+                    },
+                    'z': { 
+                        type: 'zebra-stripe', 
+                        colors: ['#2d3436', '#ffffff', '#74b9ff', '#a29bfe'], 
+                        sound: 'mid',
+                        pattern: 'zebra',
+                        particles: 31,
+                        sparks: 19
+                    }
+                };
+                
+                // Create effect function
+                function createEffect(key) {
+                    console.log('createEffect called with key:', key);
+                    const config = effectTypes[key.toLowerCase()];
+                    if (!config) {
+                        console.log('No config found for key:', key);
+                        return;
+                    }
+                    console.log('Creating effect:', config);
+                    
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    const x = Math.random() * rect.width;
+                    const y = Math.random() * rect.height;
+                    
+                    const effect = {
+                        id: effectId++,
+                        type: config.type,
+                        colors: config.colors,
+                        pattern: config.pattern,
+                        x: x,
+                        y: y,
+                        size: 40 + Math.random() * 60,
+                        life: 1.0,
+                        maxLife: 1.0,
+                        rotation: 0,
+                        scale: 1.0,
+                        velocity: {
+                            x: (Math.random() - 0.5) * 2,
+                            y: (Math.random() - 0.5) * 2
+                        },
+                        particles: [],
+                        sparks: [],
+                        smoke: [],
+                        explosionPhase: 0,
+                        burstRadius: 0,
+                        maxBurstRadius: 80 + Math.random() * 40
+                    };
+                    
+                    // Initialize firework particles based on pattern
+                    const angleStep = (Math.PI * 2) / config.particles;
+                    for (let i = 0; i < config.particles; i++) {
+                        let angle = i * angleStep;
+                        let speed = 3 + Math.random() * 4;
+                        
+                        // Adjust pattern based on firework type
+                        switch (config.pattern) {
+                            case 'circle':
+                                // Standard circular explosion
+                                break;
+                            case 'spiral':
+                                angle += Math.sin(i * 0.5) * 0.5;
+                                speed += Math.sin(i * 0.3) * 2;
+                                break;
+                            case 'zigzag':
+                                angle += (i % 2) * Math.PI;
+                                break;
+                            case 'diamond':
+                                angle = Math.floor(i / 4) * Math.PI / 2 + (i % 4) * Math.PI / 8;
+                                break;
+                            case 'star':
+                                angle = Math.floor(i / 5) * Math.PI * 2 / 5 + (i % 5) * Math.PI / 10;
+                                break;
+                            case 'flower':
+                                angle = Math.floor(i / 6) * Math.PI / 3 + (i % 6) * Math.PI / 12;
+                                break;
+                            case 'galaxy':
+                                angle += Math.sin(i * 0.2) * 2;
+                                speed += Math.cos(i * 0.3) * 3;
+                                break;
+                            case 'rainbow':
+                                angle += Math.sin(i * 0.1) * 3;
+                                break;
+                        }
+                        
+                        effect.particles.push({
+                            x: x,
+                            y: y,
+                            vx: Math.cos(angle) * speed,
+                            vy: Math.sin(angle) * speed,
+                            life: 1.0,
+                            maxLife: 1.0,
+                            size: 2 + Math.random() * 3,
+                            color: config.colors[Math.floor(Math.random() * config.colors.length)],
+                            trail: [],
+                            gravity: 0.1,
+                            fade: 0.02
+                        });
+                    }
+                    
+                    // Initialize sparks
+                    for (let i = 0; i < config.sparks; i++) {
+                        const sparkAngle = Math.random() * Math.PI * 2;
+                        const sparkSpeed = 2 + Math.random() * 3;
+                        effect.sparks.push({
+                            x: x,
+                            y: y,
+                            vx: Math.cos(sparkAngle) * sparkSpeed,
+                            vy: Math.sin(sparkAngle) * sparkSpeed,
+                            life: 1.0,
+                            size: 1 + Math.random() * 2,
+                            color: config.colors[Math.floor(Math.random() * config.colors.length)],
+                            flicker: Math.random() * Math.PI * 2
+                        });
+                    }
+                    
+                    // Initialize smoke
+                    for (let i = 0; i < 8; i++) {
+                        effect.smoke.push({
+                            x: x + (Math.random() - 0.5) * 20,
+                            y: y + (Math.random() - 0.5) * 20,
+                            vx: (Math.random() - 0.5) * 1,
+                            vy: -Math.random() * 2,
+                            life: 1.0,
+                            size: 8 + Math.random() * 12,
+                            opacity: 0.3 + Math.random() * 0.4
+                        });
+                    }
+                    
+                    effects.push(effect);
+                    
+                    // Remove oldest effects if we exceed the limit
+                    if (effects.length > MAX_EFFECTS) {
+                        effects.splice(0, effects.length - MAX_EFFECTS);
+                    }
+                    
+                    // Play sound effect
+                    playSoundEffect(config.sound);
+                }
+                
+                // Play sound effect
+                function playSoundEffect(type) {
+                    if (!ac) return;
+                    
+                    const oscillator = ac.createOscillator();
+                    const gainNode = ac.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(ac.destination);
+                    
+                    const frequencies = {
+                        'low': 100 + Math.random() * 100,
+                        'mid': 300 + Math.random() * 200,
+                        'high': 600 + Math.random() * 400
+                    };
+                    
+                    oscillator.frequency.setValueAtTime(frequencies[type], ac.currentTime);
+                    oscillator.type = 'sine';
+                    
+                    gainNode.gain.setValueAtTime(0.1, ac.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.3);
+                    
+                    oscillator.start(ac.currentTime);
+                    oscillator.stop(ac.currentTime + 0.3);
+                }
+                
+                // Spectacular Fireworks Renderer
+                function renderEffects() {
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                    
+                    // Only continue rendering if there are effects
+                    if (effects.length === 0) {
+                        requestAnimationFrame(renderEffects);
+                        return;
+                    }
+                    
+                    for (let i = effects.length - 1; i >= 0; i--) {
+                        const effect = effects[i];
+                        effect.life -= 0.008; // Slower fade for longer display
+                        
+                        if (effect.life <= 0) {
+                            effects.splice(i, 1);
+                            continue;
+                        }
+                        
+                        effect.explosionPhase += 0.02;
+                        effect.burstRadius = Math.min(effect.burstRadius + 2, effect.maxBurstRadius);
+                        
+                        // Render smoke first (background)
+                        effect.smoke.forEach(smoke => {
+                            smoke.x += smoke.vx;
+                            smoke.y += smoke.vy;
+                            smoke.life -= 0.005;
+                            smoke.size += 0.5;
+                            
+                            if (smoke.life > 0) {
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = smoke.opacity * smoke.life;
+                                effectsCtx.fillStyle = '#666666';
+                                effectsCtx.shadowBlur = 15;
+                                effectsCtx.shadowColor = '#333333';
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(smoke.x, smoke.y, smoke.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render main firework particles
+                        effect.particles.forEach(particle => {
+                            particle.x += particle.vx;
+                            particle.y += particle.vy;
+                            particle.vy += particle.gravity; // Apply gravity
+                            particle.life -= particle.fade;
+                            
+                            // Add trail effect
+                            particle.trail.push({x: particle.x, y: particle.y, life: 1.0});
+                            if (particle.trail.length > 8) {
+                                particle.trail.shift();
+                            }
+                            
+                            if (particle.life > 0) {
+                                // Render trail
+                                particle.trail.forEach((point, index) => {
+                                    const trailAlpha = (point.life * particle.life * effect.life) / particle.trail.length;
+                                    effectsCtx.save();
+                                    effectsCtx.globalAlpha = trailAlpha * 0.3;
+                                    effectsCtx.fillStyle = particle.color;
+                                    effectsCtx.shadowBlur = 8;
+                                    effectsCtx.shadowColor = particle.color;
+                                    effectsCtx.beginPath();
+                                    effectsCtx.arc(point.x, point.y, particle.size * 0.5, 0, Math.PI * 2);
+                                    effectsCtx.fill();
+                                    effectsCtx.restore();
+                                    point.life -= 0.1;
+                                });
+                                
+                                // Render main particle
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = particle.life * effect.life;
+                                effectsCtx.fillStyle = particle.color;
+                                effectsCtx.shadowBlur = 12;
+                                effectsCtx.shadowColor = particle.color;
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render sparks
+                        effect.sparks.forEach(spark => {
+                            spark.x += spark.vx;
+                            spark.y += spark.vy;
+                            spark.vy += 0.05; // Gravity
+                            spark.life -= 0.01;
+                            spark.flicker += 0.3;
+                            
+                            if (spark.life > 0) {
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = spark.life * effect.life * (0.5 + 0.5 * Math.sin(spark.flicker));
+                                effectsCtx.fillStyle = spark.color;
+                                effectsCtx.shadowBlur = 6;
+                                effectsCtx.shadowColor = spark.color;
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(spark.x, spark.y, spark.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render explosion burst effect
+                        if (effect.explosionPhase < 0.3) {
+                            const burstAlpha = (1 - effect.explosionPhase / 0.3) * effect.life;
+                            effectsCtx.save();
+                            effectsCtx.globalAlpha = burstAlpha * 0.3;
+                            effectsCtx.strokeStyle = effect.colors[0];
+                            effectsCtx.lineWidth = 3;
+                            effectsCtx.shadowBlur = 20;
+                            effectsCtx.shadowColor = effect.colors[0];
+                            effectsCtx.beginPath();
+                            effectsCtx.arc(effect.x, effect.y, effect.burstRadius, 0, Math.PI * 2);
+                            effectsCtx.stroke();
+                            effectsCtx.restore();
+                        }
+                    }
+                    
+                    requestAnimationFrame(renderEffects);
+                }
+                
+                // Start effects rendering
+                renderEffects();
+                
+                // Clear all effects function
+                function clearAllEffects() {
+                    effects = [];
+                }
+                
+                // Add clear button
+                const clearButton = document.createElement('button');
+                clearButton.textContent = '清除动效';
+                clearButton.style.fontSize = '10px';
+                clearButton.style.padding = '2px 6px';
+                clearButton.style.marginLeft = '8px';
+                clearButton.addEventListener('click', clearAllEffects);
+                document.querySelector('.row').appendChild(clearButton);
+                
+                // Add test button
+                const testButton = document.createElement('button');
+                testButton.textContent = '测试动效';
+                testButton.style.fontSize = '10px';
+                testButton.style.padding = '2px 6px';
+                testButton.style.marginLeft = '8px';
+                testButton.addEventListener('click', () => {
+                    console.log('Test button clicked');
+                    createEffect('a');
+                });
+                document.querySelector('.row').appendChild(testButton);
+
+                function ensureAudioContext() {
+                    if(ac) return;
+                    ac = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = ac.createAnalyser();
+                    analyser.fftSize = 256;
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+
+                    function draw() {
+                        requestAnimationFrame(draw);
+                        if(!analyser) return;
+                        
+                        analyser.getByteFrequencyData(dataArray);
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        
+                        const barWidt                    
+                    console.log('Canvas resized:', {
+                        effectsCanvas: {
+                            width: effectsCanvas.width,
+                            height: effectsCanvas.height,
+                            rect: effectsRect
+                        }
+                    });
+h = canvas.width / bufferLength * 0.8;
+                        const barGap = barWidth * 0.2;
+                        
+                        for(let i = 0; i < bufferLength; i++) {
+                            const v = dataArray[i] / 255;
+                            const h = v * canvas.height * 0.8;
+                            const x = (barWidth + barGap) * i + canvas.width * 0.1;
+                            
+                       // Spectacular Fireworks Configuration
+                const effectTypes = {
+                    'a': { 
+                        type: 'classic-firework', 
+                        colors: ['#ff4757', '#ff6b7a', '#ff8a9b', '#ffa8b8'], 
+                        sound: 'low',
+                        pattern: 'circle',
+                        particles: 30,
+                        sparks: 15
+                    },
+                    'b': { 
+                        type: 'aqua-burst', 
+                        colors: ['#00d2d3', '#26d0ce', '#4dd0d1', '#74d0d2'], 
+                        sound: 'mid',
+                        pattern: 'spiral',
+                        particles: 35,
+                        sparks: 20
+                    },
+                    'c': { 
+                        type: 'blue-lightning', 
+                        colors: ['#3742fa', '#5352ed', '#706fd3', '#8d8cdb'], 
+                        sound: 'high',
+                        pattern: 'zigzag',
+                        particles: 25,
+                        sparks: 18
+                    },
+                    'd': { 
+                        type: 'emerald-explosion', 
+                        colors: ['#2ed573', '#5ee584', '#8ef595', '#b1f5a6'], 
+                        sound: 'low',
+                        pattern: 'diamond',
+                        particles: 28,
+                        sparks: 12
+                    },
+                    'e': { 
+                        type: 'golden-storm', 
+                        colors: ['#ffa502', '#ffb733', '#ffc964', '#ffdb95'], 
+                        sound: 'mid',
+                        pattern: 'star',
+                        particles: 40,
+                        sparks: 25
+                    },
+                    'f': { 
+                        type: 'purple-magic', 
+                        colors: ['#a55eea', '#b877ed', '#cb90f0', '#dca9f3'], 
+                        sound: 'high',
+                        pattern: 'flower',
+                        particles: 32,
+                        sparks: 20
+                    },
+                    'g': { 
+                        type: 'galaxy-burst', 
+                        colors: ['#2f3542', '#57606f', '#747d8c', '#a4b0be'], 
+                        sound: 'low',
+                        pattern: 'galaxy',
+                        particles: 45,
+                        sparks: 30
+                    },
+                    'h': { 
+                        type: 'rainbow-explosion', 
+                        colors: ['#ff3838', '#ff9f1a', '#ffeb3b', '#32ff7e', '#7bed9f', '#70a1ff', '#5352ed', '#ff3838'], 
+                        sound: 'mid',
+                        pattern: 'rainbow',
+                        particles: 50,
+                        sparks: 35
+                    },
+                    'i': { 
+                        type: 'ice-crystal', 
+                        colors: ['#74b9ff', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'crystal',
+                        particles: 22,
+                        sparks: 15
+                    },
+                    'j': { 
+                        type: 'jade-fire', 
+                        colors: ['#00b894', '#00cec9', '#6c5ce7', '#a29bfe'], 
+                        sound: 'low',
+                        pattern: 'jade',
+                        particles: 30,
+                        sparks: 18
+                    },
+                    'k': { 
+                        type: 'kaleidoscope', 
+                        colors: ['#ff7675', '#fd79a8', '#fdcb6e', '#e17055'], 
+                        sound: 'mid',
+                        pattern: 'kaleidoscope',
+                        particles: 38,
+                        sparks: 22
+                    },
+                    'l': { 
+                        type: 'lightning-storm', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#74b9ff'], 
+                        sound: 'high',
+                        pattern: 'lightning',
+                        particles: 28,
+                        sparks: 20
+                    },
+                    'm': { 
+                        type: 'magenta-dream', 
+                        colors: ['#e84393', '#fd79a8', '#fdcb6e', '#00b894'], 
+                        sound: 'low',
+                        pattern: 'heart',
+                        particles: 26,
+                        sparks: 16
+                    },
+                    'n': { 
+                        type: 'neon-explosion', 
+                        colors: ['#00d2d3', '#ff9ff3', '#feca57', '#ff6b6b'], 
+                        sound: 'mid',
+                        pattern: 'neon',
+                        particles: 35,
+                        sparks: 25
+                    },
+                    'o': { 
+                        type: 'orbital-burst', 
+                        colors: ['#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'orbital',
+                        particles: 42,
+                        sparks: 28
+                    },
+                    'p': { 
+                        type: 'plasma-fire', 
+                        colors: ['#ff7675', '#fd79a8', '#fdcb6e', '#00b894'], 
+                        sound: 'low',
+                        pattern: 'plasma',
+                        particles: 33,
+                        sparks: 20
+                    },
+                    'q': { 
+                        type: 'quantum-burst', 
+                        colors: ['#2d3436', '#636e72', '#74b9ff', '#a29bfe'], 
+                        sound: 'mid',
+                        pattern: 'quantum',
+                        particles: 48,
+                        sparks: 32
+                    },
+                    'r': { 
+                        type: 'royal-fireworks', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#74b9ff'], 
+                        sound: 'high',
+                        pattern: 'royal',
+                        particles: 36,
+                        sparks: 24
+                    },
+                    's': { 
+                        type: 'solar-flare', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'solar',
+                        particles: 40,
+                        sparks: 26
+                    },
+                    't': { 
+                        type: 'titanium-blast', 
+                        colors: ['#636e72', '#74b9ff', '#a29bfe', '#fd79a8'], 
+                        sound: 'mid',
+                        pattern: 'titanium',
+                        particles: 29,
+                        sparks: 18
+                    },
+                    'u': { 
+                        type: 'ultra-violet', 
+                        colors: ['#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'], 
+                        sound: 'high',
+                        pattern: 'ultra',
+                        particles: 44,
+                        sparks: 30
+                    },
+                    'v': { 
+                        type: 'volcanic-eruption', 
+                        colors: ['#d63031', '#e17055', '#fdcb6e', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'volcano',
+                        particles: 37,
+                        sparks: 25
+                    },
+                    'w': { 
+                        type: 'white-lightning', 
+                        colors: ['#ffffff', '#f8f9fa', '#e9ecef', '#dee2e6'], 
+                        sound: 'mid',
+                        pattern: 'white',
+                        particles: 32,
+                        sparks: 22
+                    },
+                    'x': { 
+                        type: 'x-ray-burst', 
+                        colors: ['#2d3436', '#636e72', '#74b9ff', '#a29bfe'], 
+                        sound: 'high',
+                        pattern: 'xray',
+                        particles: 34,
+                        sparks: 20
+                    },
+                    'y': { 
+                        type: 'yellow-sunburst', 
+                        colors: ['#fdcb6e', '#e17055', '#d63031', '#ff7675'], 
+                        sound: 'low',
+                        pattern: 'sunburst',
+                        particles: 39,
+                        sparks: 27
+                    },
+                    'z': { 
+                        type: 'zebra-stripe', 
+                        colors: ['#2d3436', '#ffffff', '#74b9ff', '#a29bfe'], 
+                        sound: 'mid',
+                        pattern: 'zebra',
+                        particles: 31,
+                        sparks: 19
+                    }
+               });
+
+                audio.addEventListener('ended', () => {
+                    vscode.postMessage({ command                    console.log('createEffect called with key:', key);
+                    const config = effectTypes[key.toLowerCase()];
+                    if (!config) {
+                        console.log('No config found for key:', key);
+                        return;
+                    }
+                    console.log('Creating effect:', config);
+
+        </body>
+        </html>`;
+    }
+}
+
+export function activate(context: vscode.ExtensionContext) {
+    console.log('CodeBGM extension is now active!');
+
+    // 注册左侧边栏视图
+    const provider = new CodebgmSidebarProvider(context);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(CodebgmSidebarProvider.viewId, p                        colors: config.colors,
+                        pattern: config.pattern,
+                        x: x,
+                        y: y,
+                        size: 40 + Math.random() * 60,
+                        life: 1.0,
+                        maxLife: 1.0,
+                        rotation: 0,
+                        scale: 1.0,
+                        velocity: {
+                            x: (Math.random() - 0.5) * 2,
+                            y: (Math.random() - 0.5) * 2
+                        },
+                        particles: [],
+                        sparks: [],
+                        smoke: [],
+                        explosionPhase: 0,
+                        burstRadius: 0,
+                        maxBurstRadius: 80 + Math.random() * 40
+     // Also try window event listener
+                          // Initialize firework particles based on pattern
+                    const angleStep = (Math.PI * 2) / config.particles;
+                    for (let i = 0; i < config.particles; i++) {
+                        let angle = i * angleStep;
+                        let speed = 3 + Math.random() * 4;
+                        
+                        // Adjust pattern based on firework type
+                        switch (config.pattern) {
+                            case 'circle':
+                                // Standard circular explosion
+                                break;
+                            case 'spiral':
+                                angle += Math.sin(i * 0.5) * 0.5;
+                                speed += Math.sin(i * 0.3) * 2;
+                                break;
+                            case 'zigzag':
+                                angle += (i % 2) * Math.PI;
+                                break;
+                            case 'diamond':
+                                angle = Math.floor(i / 4) * Math.PI / 2 + (i % 4) * Math.PI / 8;
+                                break;
+                            case 'star':
+                                angle = Math.floor(i / 5) * Math.PI * 2 / 5 + (i % 5) * Math.PI / 10;
+                                break;
+                            case 'flower':
+                                angle = Math.floor(i / 6) * Math.PI / 3 + (i % 6) * Math.PI / 12;
+                                break;
+                            case 'galaxy':
+                                angle += Math.sin(i * 0.2) * 2;
+                                speed += Math.cos(i * 0.3) * 3;
+                                break;
+                            case 'rainbow':
+                                angle += Math.sin(i * 0.1) * 3;
+                                break;
+                        }
+                        
+                        effect.particles.push({
+                            x: x,
+                            y: y,
+                            vx: Math.cos(angle) * speed,
+                            vy: Math.sin(angle) * speed,
+                            life: 1.0,
+                            maxLife: 1.0,
+                            size: 2 + Math.random() * 3,
+                            color: config.colors[Math.floor(Math.random() * config.colors.length)],
+                            trail: [],
+                            gravity: 0.1,
+                            fade: 0.02
+                        });
+                    }
+                    
+                    // Initialize sparks
+                    for (let i = 0; i < config.sparks; i++) {
+                        const sparkAngle = Math.random() * Math.PI * 2;
+                        const sparkSpeed = 2 + Math.random() * 3;
+                        effect.sparks.push({
+                            x: x,
+                            y: y,
+                            vx: Math.cos(sparkAngle) * sparkSpeed,
+                            vy: Math.sin(sparkAngle) * sparkSpeed,
+                            life: 1.0,
+                            size: 1 + Math.random() * 2,
+                            color: config.colors[Math.floor(Math.random() * config.colors.length)],
+                            flicker: Math.random() * Math.PI * 2
+                        });
+                    }
+                    
+                    // Initialize smoke
+                    for (let i = 0; i < 8; i++) {
+                        effect.smoke.push({
+                            x: x + (Math.random() - 0.5) * 20,
+                            y: y + (Math.random() - 0.5) * 20,
+                            vx: (Math.random() - 0.5) * 1,
+                            vy: -Math.random() * 2,
+                            life: 1.0,
+                            size: 8 + Math.random() * 12,
+                            opacity: 0.3 + Math.random() * 0.4
+                        });
+ clicked, creating test effect');
+                    createEffect('a');
+                
+                // Add test button
+                const testButton = document.createElement('button');
+                testButton.textContent = '测试动效';
+                testButton.style.fontSize = '10px';
+                testButton.style.padding = '2px 6px';
+                testButton.style.marginLeft = '8px';
+                testButton.addEventListener('click', () => {
+                    console.log('Test button clicked');
+                    createEffect('a');
+                });
+                document.querySelector('.row').appendChild(testButton);
+                        case 'keyPressed':
+                            console.log('Received keyPressed message:', m.key);
+                            createEffect(m.key);
+                            break;
+                            vscode.postMessage({ command: 'audioResumed' });
+                        } else {
+                            audio.pause();
+                            toggle.textContent = '播放';
+                            vscode.postMessage({ command: 'audioPaused' });
+                // Beautiful render effects with gradients and glow
+                function renderEffects() {
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                    
+                    // Only continue rendering if there are effects
+                    if (effects.length === 0) {
+                        requestAnimationFrame(renderEffects);
+                        return;
+                         // Spectacular Fireworks Renderer
+                function renderEffects() {
+                    const rect = effectsCanvas.getBoundingClientRect();
+                    effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                    
+                    // Only continue rendering if there are effects
+                    if (effects.length === 0) {
+                        requestAnimationFrame(renderEffects);
+                        return;
+                    }
+                    
+                    for (let i = effects.length - 1; i >= 0; i--) {
+                        const effect = effects[i];
+                        effect.life -= 0.008; // Slower fade for longer display
+                        
+                        if (effect.life <= 0) {
+                            effects.splice(i, 1);
+                            continue;
+                        }
+                        
+                        effect.explosionPhase += 0.02;
+                        effect.burstRadius = Math.min(effect.burstRadius + 2, effect.maxBurstRadius);
+                        
+                        // Render smoke first (background)
+                        effect.smoke.forEach(smoke => {
+                            smoke.x += smoke.vx;
+                            smoke.y += smoke.vy;
+                            smoke.life -= 0.005;
+                            smoke.size += 0.5;
+                            
+                            if (smoke.life > 0) {
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = smoke.opacity * smoke.life;
+                                effectsCtx.fillStyle = '#666666';
+                                effectsCtx.shadowBlur = 15;
+                                effectsCtx.shadowColor = '#333333';
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(smoke.x, smoke.y, smoke.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render main firework particles
+                        effect.particles.forEach(particle => {
+                            particle.x += particle.vx;
+                            particle.y += particle.vy;
+                            particle.vy += particle.gravity; // Apply gravity
+                            particle.life -= particle.fade;
+                            
+                            // Add trail effect
+                            particle.trail.push({x: particle.x, y: particle.y, life: 1.0});
+                            if (particle.trail.length > 8) {
+                                particle.trail.shift();
+                            }
+                            
+                            if (particle.life > 0) {
+                                // Render trail
+                                particle.trail.forEach((point, index) => {
+                                    const trailAlpha = (point.life * particle.life * alpha) / particle.trail.length;
+                                    effectsCtx.save();
+                                    effectsCtx.globalAlpha = trailAlpha * 0.3;
+                                    effectsCtx.fillStyle = particle.color;
+                                    effectsCtx.shadowBlur = 8;
+                                    effectsCtx.shadowColor = particle.color;
+                                    effectsCtx.beginPath();
+                                    effectsCtx.arc(point.x, point.y, particle.size * 0.5, 0, Math.PI * 2);
+                                    effectsCtx.fill();
+                                    effectsCtx.restore();
+                                    point.life -= 0.1;
+                                });
+                                
+                                // Render main particle
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = particle.life * alpha;
+                                effectsCtx.fillStyle = particle.color;
+                                effectsCtx.shadowBlur = 12;
+                                effectsCtx.shadowColor = particle.color;
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render sparks
+                        effect.sparks.forEach(spark => {
+                            spark.x += spark.vx;
+                            spark.y += spark.vy;
+                            spark.vy += 0.05; // Gravity
+                            spark.life -= 0.01;
+                            spark.flicker += 0.3;
+                            
+                            if (spark.life > 0) {
+                                effectsCtx.save();
+                                effectsCtx.globalAlpha = spark.life * alpha * (0.5 + 0.5 * Math.sin(spark.flicker));
+                                effectsCtx.fillStyle = spark.color;
+                                effectsCtx.shadowBlur = 6;
+                                effectsCtx.shadowColor = spark.color;
+                                effectsCtx.beginPath();
+                                effectsCtx.arc(spark.x, spark.y, spark.size, 0, Math.PI * 2);
+                                effectsCtx.fill();
+                                effectsCtx.restore();
+                            }
+                        });
+                        
+                        // Render explosion burst effect
+                        if (effect.explosionPhase < 0.3) {
+                            const burstAlpha = (1 - effect.explosionPhase / 0.3) * alpha;
+                            effectsCtx.save();
+                            effectsCtx.globalAlpha = burstAlpha * 0.3;
+                            effectsCtx.strokeStyle = effect.colors[0];
+                            effectsCtx.lineWidth = 3;
+                            effectsCtx.shadowBlur = 20;
+                            effectsCtx.shadowColor = effect.colors[0];
+                            effectsCtx.beginPath();
+                            effectsCtx.arc(effect.x, effect.y, effect.burstRadius, 0, Math.PI * 2);
+                            effectsCtx.stroke();
+                            effectsCtx.restore();
+                        }
+                    }
+                    
+                    requestAnimationFrame(renderEffects);
+                }

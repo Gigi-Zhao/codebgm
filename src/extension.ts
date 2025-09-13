@@ -10,7 +10,7 @@ class MusicPlayerPanel {
     private _keystrokes: number[] = [];
     private _currentMode: string = 'deep_focus';
     private _lastSwitchTime: number = Date.now();
-    private _minDuration: number = 5000; // 最短持续时间（毫秒）
+    private _minDuration: number = 15000; // 最短切换间隔（15秒）
     private _currentAudio: string | undefined;
     private _playlists: { [key: string]: string[] } = {
         'deep_focus': [
@@ -308,7 +308,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
     private _view: vscode.WebviewView | undefined;
     private _keystrokes: number[] = [];
     private _lastSwitchTime: number = Date.now();
-    private _minDuration: number = 5000;
+    private _minDuration: number = 15000; // 最短模式切换间隔（15秒）
     private _currentMode: string = 'deep_focus';
     private _isManuallyPaused: boolean = false;
     private _playlists: { [key: string]: string[] } = {
@@ -401,20 +401,29 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
     private _analyzeTypingPattern() {
         if (this._keystrokes.length < 2) { return; }
+        
+        const now = Date.now();
+        // 检查是否达到最短模式切换间隔（15秒）
+        const timeSinceLastSwitch = now - this._lastSwitchTime;
+        if (timeSinceLastSwitch < this._minDuration) {
+            // 如果还在冷却时间内，不进行模式切换
+            console.log(`模式切换冷却中... 剩余 ${Math.round((this._minDuration - timeSinceLastSwitch) / 1000)} 秒`);
+            return;
+        }
+
         let intervals: number[] = [];
         for (let i = 1; i < this._keystrokes.length; i++) {
             intervals.push(this._keystrokes[i] - this._keystrokes[i - 1]);
         }
         let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
         let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
-        let now = Date.now();
-        if (now - this._lastSwitchTime < this._minDuration) { return; }
 
         let newMode = 'deep_focus';
         if (avg < 200) { newMode = 'energy'; }
         else if (variance > 50000) { newMode = 'creative'; }
 
         if (newMode !== this._currentMode) {
+            console.log(`模式切换: ${this._currentMode} -> ${newMode} (冷却时间已过)`);
             this._currentMode = newMode;
             this._lastSwitchTime = now;
             // Only auto-play if not manually paused
@@ -662,11 +671,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     oscillator.frequency.setValueAtTime(frequencies[type], ac.currentTime);
                     oscillator.type = 'sine';
                     
-                    gainNode.gain.setValueAtTime(0.1, ac.currentTime);
-                    gainNode.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.3);
+                    gainNode.gain.setValueAtTime(0.5, ac.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.05, ac.currentTime + 0.5);
                     
                     oscillator.start(ac.currentTime);
-                    oscillator.stop(ac.currentTime + 0.3);
+                    oscillator.stop(ac.currentTime + 0.5);
                 }
                 
                 // Render effects
