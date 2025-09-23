@@ -1,5 +1,20 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
+
+// List audio files under media/<mode> folder
+function listModeTracks(baseFsPath: string, mode: string): string[] {
+    try {
+        const dir = path.join(baseFsPath, 'media', mode);
+    if (!fs.existsSync(dir)) { return []; }
+        const files = fs.readdirSync(dir, { withFileTypes: true });
+        const allowed = new Set(['.mp3', '.wav', '.ogg', '.m4a']);
+        return files
+            .filter(d => d.isFile())
+            .map(d => d.name)
+            .filter(name => allowed.has(path.extname(name).toLowerCase()));
+    } catch { return []; }
+}
 
 class MusicPlayerPanel {
     private static readonly viewType = 'codebgmPlayer';
@@ -10,20 +25,9 @@ class MusicPlayerPanel {
     private _keystrokes: number[] = [];
     private _currentMode: string = 'deep_focus';
     private _lastSwitchTime: number = Date.now();
-    private _minDuration: number = 15000; // 最短切换间隔（15秒）
+    private _minDuration: number = 60000; // 最短切换间隔（60秒）
     private _currentAudio: string | undefined;
-    private _playlists: { [key: string]: string[] } = {
-        'deep_focus': [
-            'Team Astro - Better, Together, Forever.mp3',
-            '坂本龍一 - aqua.mp3',
-        ],
-        'energy': [
-            'Pianoboy高至豪 - The truth that you leave.mp3'
-        ],
-        'creative': [
-            '조한빛 - Endless Path.mp3'
-        ]
-    };
+    // playlists now shared via PLAYLISTS constant
 
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
@@ -38,7 +42,7 @@ class MusicPlayerPanel {
         // 设置初始音乐，但不自动播放
         this._panel.webview.postMessage({ 
             command: 'init',
-            track: this._getMediaUri(this._playlists[this._currentMode][0]),
+            track: this._resolveTrackUriForMode(this._currentMode),
             mode: this._getModeDisplayName(this._currentMode)
         });
     }
@@ -48,8 +52,18 @@ class MusicPlayerPanel {
         return this._panel.webview.asWebviewUri(uri).toString();
     }
 
+    private _resolveTrackUriForMode(mode: string): string {
+        const base = this._extensionUri.fsPath;
+        const list = listModeTracks(base, mode);
+        if (list.length > 0) {
+            return this._getMediaUri(path.posix.join(mode, list[0]));
+        }
+        return '';
+    }
+
     private _playRandomTrack(mode: string) {
-        const tracks = this._playlists[mode];
+        const base = this._extensionUri.fsPath;
+        const tracks = listModeTracks(base, mode);
         if (!tracks || tracks.length === 0) {
             return;
         }
@@ -59,7 +73,7 @@ class MusicPlayerPanel {
 
         this._panel.webview.postMessage({
             command: 'playAudio',
-            track: this._getMediaUri(track).toString(),
+            track: this._getMediaUri(path.posix.join(mode, track)).toString(),
             mode: this._getModeDisplayName(mode)
         });
     }
@@ -126,8 +140,12 @@ class MusicPlayerPanel {
             intervals.push(this._keystrokes[i] - this._keystrokes[i - 1]);
         }
 
-        let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+    let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+    // recent burst: average of last 5 intervals (or all if fewer)
+    const k = Math.min(5, intervals.length);
+    const recent = intervals.slice(-k);
+    const recentAvg = recent.reduce((a,b)=>a+b,0) / k;
 
         let now = Date.now();
         if (now - this._lastSwitchTime < this._minDuration) {
@@ -135,9 +153,10 @@ class MusicPlayerPanel {
         }
 
         let newMode = 'deep_focus';
-        if (avg < 200) {
+        // easier energy: overall avg < 260ms OR recent burst avg < 300ms
+        if (avg < 260 || recentAvg < 300) {
             newMode = 'energy';
-        } else if (variance > 50000) {
+        } else if (variance > 80000) { // relax creative to favor energy
             newMode = 'creative';
         }
 
@@ -308,21 +327,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
     private _view: vscode.WebviewView | undefined;
     private _keystrokes: number[] = [];
     private _lastSwitchTime: number = Date.now();
-    private _minDuration: number = 15000; // 最短模式切换间隔（15秒）
+    private _minDuration: number = 60000; // 最短模式切换间隔（60秒）
     private _currentMode: string = 'deep_focus';
     private _isManuallyPaused: boolean = false;
-    private _playlists: { [key: string]: string[] } = {
-        'deep_focus': [
-            'Team Astro - Better, Together, Forever.mp3',
-            '坂本龍一 - aqua.mp3',
-        ],
-        'energy': [
-            'Pianoboy高至豪 - The truth that you leave.mp3'
-        ],
-        'creative': [
-            '조한빛 - Endless Path.mp3'
-        ]
-    };
+    // playlists now shared via PLAYLISTS constant
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -336,7 +344,10 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
         this._setupKeyboardListener();
         webviewView.webview.html = this._getHtml(webviewView.webview);
         // 初始设置但不自动播放
-        this._postInit(this._playlists[this._currentMode][0]);
+    // pick first available track in folder (may be empty string if none)
+    const base = this.context.extensionPath;
+    const list = listModeTracks(base, this._currentMode);
+    this._postInit(list.length ? path.posix.join(this._currentMode, list[0]) : '');
     }
 
     private _postInit(filename: string) {
@@ -384,13 +395,13 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 if (this._view) {
                     const lastChange = e.contentChanges[e.contentChanges.length - 1];
                     if (lastChange && lastChange.text) {
-                        // Extract the last character typed
-                        const lastChar = lastChange.text[lastChange.text.length - 1];
-                        if (lastChar && lastChar.match(/[a-z]/i)) {
-                            this._view.webview.postMessage({
-                                command: 'keyPressed',
-                                key: lastChar.toLowerCase()
-                            });
+                        // Map any character to a-z for effect selection
+                        const txt = lastChange.text;
+                        const ch = txt.charAt(txt.length - 1);
+                        if (ch) {
+                            const cp = ch.codePointAt(0) || 0;
+                            const mapped = /[a-z]/i.test(ch) ? ch.toLowerCase() : String.fromCharCode(97 + (cp % 26));
+                            this._view.webview.postMessage({ command: 'keyPressed', key: mapped });
                         }
                     }
                 }
@@ -415,12 +426,15 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
         for (let i = 1; i < this._keystrokes.length; i++) {
             intervals.push(this._keystrokes[i] - this._keystrokes[i - 1]);
         }
-        let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+    let avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    let variance = intervals.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / intervals.length;
+    const k = Math.min(5, intervals.length);
+    const recent = intervals.slice(-k);
+    const recentAvg = recent.reduce((a,b)=>a+b,0) / k;
 
-        let newMode = 'deep_focus';
-        if (avg < 200) { newMode = 'energy'; }
-        else if (variance > 50000) { newMode = 'creative'; }
+    let newMode = 'deep_focus';
+    if (avg < 260 || recentAvg < 300) { newMode = 'energy'; }
+    else if (variance > 80000) { newMode = 'creative'; }
 
         if (newMode !== this._currentMode) {
             console.log(`模式切换: ${this._currentMode} -> ${newMode} (冷却时间已过)`);
@@ -435,12 +449,13 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
     private _playRandomTrack(mode: string) {
         if (!this._view) { return; }
-        const tracks = this._playlists[mode] || [];
+        const base = this.context.extensionPath;
+        const tracks = listModeTracks(base, mode) || [];
         if (tracks.length === 0) { return; }
         const track = tracks[Math.floor(Math.random() * tracks.length)];
         this._view.webview.postMessage({
             command: 'playAudio',
-            track: this._getMediaUri(track),
+            track: this._getMediaUri(path.posix.join(mode, track)),
             mode: this._getModeDisplayName(mode)
         });
     }
@@ -476,11 +491,17 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     gap: 8px;
                 }
                 .row { 
-                    display: flex; 
+                    display: grid; 
+                    grid-template-columns: 1fr auto;
                     align-items: center; 
                     gap: 8px;
                     margin-bottom: 8px;
                 }
+                .row .left { display: inline-flex; align-items: center; gap: 10px; }
+                .row .right { display: inline-flex; align-items: center; gap: 8px; }
+                #effectsToggle { padding: 3px 10px; font-size: 11px; border-radius: 4px; }
+                .effects-controls { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+                #toggle { padding: 3px 10px; font-size: 11px; border-radius: 4px; }
                 .status { 
                     font-size: 12px;
                     opacity: 0.8;
@@ -501,6 +522,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     height: 100px;
                     background: transparent;
                     border-radius: 2px;
+                    display: block;
                 }
                 #effectsCanvas {
                     width: 100%;
@@ -599,14 +621,15 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
         <body>
             <div class="container">
                 <div class="row">
-                    <button id="toggle">播放</button>
-                    <span class="status">模式：<span id="mode">深度专注</span></span>
-                </div>
-                <div class="row">
-                    <span class="status" style="font-size: 10px; opacity: 0.6;">按 A-Z 键触发动效</span>
-                    <button id="effectsToggle" title="开关打字动效与音效" style="padding:2px 8px;font-size:11px;">动效开</button>
+                    <div class="left">
+                        <button id="toggle">PLAY</button>
+                        <span class="status">模式：<span id="mode">深度专注</span></span>
+                    </div>
                 </div>
                 <canvas id="viz"></canvas>
+                <div class="effects-controls">
+                    <button id="effectsToggle" title="开关打字动效与音效">OFF</button>
+                </div>
                 <canvas id="effectsCanvas"></canvas>
                 <div class="pad-section" id="padSection">
                     <div class="pad-header">
@@ -649,8 +672,8 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 const effectsCanvas = document.getElementById('effectsCanvas');
                 const effectsCtx = effectsCanvas.getContext('2d');
                 const effectsToggle = document.getElementById('effectsToggle');
-                let effectsEnabled = true;
-                function updateEffectsToggleLabel(){ if(effectsToggle) effectsToggle.textContent = effectsEnabled ? '动效开' : '动效关'; }
+                let effectsEnabled = false; // default OFF to avoid confusion
+                function updateEffectsToggle(){ if(effectsToggle){ effectsToggle.textContent = effectsEnabled ? 'ON' : 'OFF'; } }
                 // Drum pad elements
                 const padsGrid = document.getElementById('padsGrid');
                 const stepsDiv = document.getElementById('steps');
@@ -662,24 +685,25 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 const padVol = document.getElementById('padVol');
                 const padVolVal = document.getElementById('padVolVal');
                 
-                // Set canvas size
+                // HiDPI-safe canvas sizing
+                let dpr = window.devicePixelRatio || 1;
+                let vizCssWidth = 0, vizCssHeight = 0;
+                let effectsCssWidth = 0, effectsCssHeight = 0;
                 function resizeCanvas() {
+                    dpr = window.devicePixelRatio || 1;
                     const rect = canvas.getBoundingClientRect();
-                    canvas.width = rect.width * window.devicePixelRatio;
-                    canvas.height = rect.height * window.devicePixelRatio;
-                    
+                    vizCssWidth = Math.max(1, Math.floor(rect.width));
+                    vizCssHeight = Math.max(1, Math.floor(rect.height));
+                    canvas.width = Math.floor(vizCssWidth * dpr);
+                    canvas.height = Math.floor(vizCssHeight * dpr);
+                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
                     const effectsRect = effectsCanvas.getBoundingClientRect();
-                    effectsCanvas.width = effectsRect.width * window.devicePixelRatio;
-                    effectsCanvas.height = effectsRect.height * window.devicePixelRatio;
-                    effectsCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
-                    
-                    console.log('Canvas resized:', {
-                        effectsCanvas: {
-                            width: effectsCanvas.width,
-                            height: effectsCanvas.height,
-                            rect: effectsRect
-                        }
-                    });
+                    effectsCssWidth = Math.max(1, Math.floor(effectsRect.width));
+                    effectsCssHeight = Math.max(1, Math.floor(effectsRect.height));
+                    effectsCanvas.width = Math.floor(effectsCssWidth * dpr);
+                    effectsCanvas.height = Math.floor(effectsCssHeight * dpr);
+                    effectsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 }
                 resizeCanvas();
                 window.addEventListener('resize', resizeCanvas);
@@ -690,23 +714,23 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         effectsEnabled = st.effectsEnabled;
                     }
                 } catch {}
-                updateEffectsToggleLabel();
+                updateEffectsToggle();
                 if (effectsToggle) {
                     effectsToggle.addEventListener('click', () => {
                         effectsEnabled = !effectsEnabled;
-                        if (!effectsEnabled) {
-                            // clear any existing visual effects when turning off
-                            effects = [];
+                        if (effectsEnabled) {
+                            // Turning ON should enable audio context so typing has sound
                             try {
-                                const rect = effectsCanvas.getBoundingClientRect();
-                                effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                                ensureAudioContext();
+                                if (ac && ac.state === 'suspended') { ac.resume().catch(()=>{}); }
                             } catch {}
+                        } else {
+                            // Turning OFF clears visuals
+                            effects = [];
+                            try { effectsCtx.clearRect(0, 0, effectsCssWidth, effectsCssHeight); } catch {}
                         }
-                        updateEffectsToggleLabel();
-                        try {
-                            const st = vscode.getState() || {};
-                            vscode.setState({ ...st, effectsEnabled });
-                        } catch {}
+                        updateEffectsToggle();
+                        try { const st = vscode.getState() || {}; vscode.setState({ ...st, effectsEnabled }); } catch {}
                     });
                 }
 
@@ -760,9 +784,15 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     }
                     console.log('Creating effect:', config);
                     
-                    const rect = effectsCanvas.getBoundingClientRect();
-                    const x = Math.random() * rect.width;
-                    const y = Math.random() * rect.height;
+                    // Use tracked CSS sizes to avoid coordinate mismatches
+                    if (!effectsCssWidth || !effectsCssHeight) {
+                        resizeCanvas();
+                    }
+                    const margin = 12; // keep away from edges to avoid visual stacking at borders
+                    const w = Math.max(1, effectsCssWidth - margin * 2);
+                    const h = Math.max(1, effectsCssHeight - margin * 2);
+                    const x = margin + Math.random() * w;
+                    const y = margin + Math.random() * h;
                     
                     const effect = {
                         id: effectId++,
@@ -813,7 +843,9 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                     const gainNode = ac.createGain();
                     
                     oscillator.connect(gainNode);
-                    gainNode.connect(ac.destination);
+                    // Route through padMaster if available to share volume/processing
+                    const dest = (typeof padMaster !== 'undefined' && padMaster) ? padMaster : ac.destination;
+                    gainNode.connect(dest);
                     
                     const frequencies = {
                         'low': 100 + Math.random() * 100,
@@ -833,8 +865,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                 
                 // Render effects
                 function renderEffects() {
-                    const rect = effectsCanvas.getBoundingClientRect();
-                    effectsCtx.clearRect(0, 0, rect.width, rect.height);
+                    effectsCtx.clearRect(0, 0, effectsCssWidth, effectsCssHeight);
                     
                     // Only continue rendering if there are effects
                     if (effects.length === 0) {
@@ -1185,22 +1216,27 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         if(!analyser) return;
                         
                         analyser.getByteFrequencyData(dataArray);
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.clearRect(0, 0, vizCssWidth, vizCssHeight);
                         
-                        const barWidth = canvas.width / bufferLength * 0.8;
-                        const barGap = barWidth * 0.2;
+                        const N = bufferLength;
+                        const sideMargin = Math.max(4, Math.floor(vizCssWidth * 0.03));
+                        let gap = Math.max(1, Math.min(4, Math.floor(vizCssWidth / N * 0.15)));
+                        let contentWidth = vizCssWidth - sideMargin * 2 - gap * (N - 1);
+                        if (contentWidth <= 0) { gap = 0; contentWidth = vizCssWidth - sideMargin * 2; }
+                        const barWidth = contentWidth / N;
                         
-                        for(let i = 0; i < bufferLength; i++) {
+                        for(let i = 0; i < N; i++) {
                             const v = dataArray[i] / 255;
-                            const h = v * canvas.height * 0.8;
-                            const x = (barWidth + barGap) * i + canvas.width * 0.1;
+                            const h = Math.max(1, v * vizCssHeight);
+                            const x = sideMargin + i * (barWidth + gap);
+                            const y = Math.max(0, vizCssHeight - h);
                             
-                            const gradient = ctx.createLinearGradient(0, canvas.height - h, 0, canvas.height);
+                            const gradient = ctx.createLinearGradient(0, y, 0, vizCssHeight);
                             gradient.addColorStop(0, \`hsla(\${200 + i}, 70%, 50%, 0.8)\`);
                             gradient.addColorStop(1, \`hsla(\${200 + i}, 70%, 30%, 0.5)\`);
                             
                             ctx.fillStyle = gradient;
-                            ctx.fillRect(x, canvas.height - h, barWidth, h);
+                            ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(barWidth), Math.ceil(h));
                         }
                     }
                     draw();
@@ -1218,11 +1254,11 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                         
                         if(audio.paused) {
                             await audio.play();
-                            toggle.textContent = '暂停';
+                            toggle.textContent = 'PAUSE';
                             vscode.postMessage({ command: 'audioResumed' });
                         } else {
                             audio.pause();
-                            toggle.textContent = '播放';
+                            toggle.textContent = 'PLAY';
                             vscode.postMessage({ command: 'audioPaused' });
                         }
                     } catch(err) {
@@ -1244,6 +1280,8 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
                             break;
                         case 'keyPressed':
                             if (effectsEnabled) {
+                                // Ensure audio is ready for typing SFX even if music not started
+                                try { ensureAudioContext(); if (ac && ac.state === 'suspended') { ac.resume().catch(()=>{}); } } catch {}
                                 console.log('Received keyPressed message:', m.key);
                                 createEffect(m.key);
                             }
@@ -1253,7 +1291,7 @@ class CodebgmSidebarProvider implements vscode.WebviewViewProvider {
 
                 audio.addEventListener('ended', () => {
                     vscode.postMessage({ command: 'audioEnded' });
-                    toggle.textContent = '播放';
+                    toggle.textContent = 'PLAY';
                 });
 
                 // ==== Drum pad (4x4) & 16-step sequencer ====
